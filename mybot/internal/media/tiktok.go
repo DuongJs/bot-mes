@@ -60,7 +60,7 @@ func GetTikTokMedia(ctx context.Context, url string) ([]MediaItem, error) {
 
 	// Fetch from API
 	apiURL := fmt.Sprintf("%s?aweme_id=%s", TikTokAPI, awemeID)
-	apiReq, err := http.NewRequestWithContext(ctx, "OPTIONS", apiURL, nil)
+	apiReq, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create api request: %w", err)
 	}
