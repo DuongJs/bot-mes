@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/rs/zerolog"
 	"go.mau.fi/mautrix-meta/pkg/messagix"
@@ -25,13 +26,16 @@ import (
 var urlRegex = regexp.MustCompile(`https?://\S+`)
 
 var (
-	logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
-	cfg    *config.Config
-	client *messagix.Client
-	cmds   *commands.Registry
+	logger    = zerolog.New(os.Stdout).With().Timestamp().Logger()
+	cfg       *config.Config
+	client    *messagix.Client
+	cmds      *commands.Registry
+	startTime time.Time
 )
 
 func main() {
+	startTime = time.Now()
+
 	var err error
 	cfg, err = config.Load("config.json")
 	if err != nil {
@@ -42,6 +46,8 @@ func main() {
 	cmds.Register("ping", &commands.PingCommand{})
 	cmds.Register("help", &commands.HelpCommand{Registry: cmds})
 	cmds.Register("media", &commands.MediaCommand{})
+	cmds.Register("uptime", &commands.UptimeCommand{})
+	cmds.Register("about", &commands.AboutCommand{})
 
 	// Setup restart channel
 	restartChan := make(chan struct{})
@@ -209,9 +215,10 @@ func handleMessage(msg *commands.WrappedMessage) {
 
 	logger.Info().Str("cmd", cmdName).Msg("Processing command")
 	err := cmds.Execute(cmdName, &commands.Context{
-		Client:  client,
-		Message: msg,
-		Args:    args,
+		Client:    client,
+		Message:   msg,
+		Args:      args,
+		StartTime: startTime,
 	})
 	if err != nil {
 		logger.Error().Err(err).Msg("Command execution failed")

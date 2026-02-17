@@ -1,6 +1,7 @@
 {
   "command_prefix": "!",
   "port": "8080",
+  "cookie_string": "",
   "cookies": {
     "c_user": "",
     "xs": "",
