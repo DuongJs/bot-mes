@@ -36,7 +36,8 @@ func (c *Client) SendMessage(ctx context.Context, threadID int64, text string) e
 		SyncGroup: 1,
 		Otid:      methods.GenerateEpochID(),
 	}
-	return c.client.ExecuteTask(ctx, task)
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
 }
 
 func (c *Client) SendMedia(ctx context.Context, threadID int64, data []byte, filename, mimeType string) error {
@@ -50,7 +51,7 @@ func (c *Client) SendMedia(ctx context.Context, threadID int64, data []byte, fil
 	}
 
 	var realFBID int64
-	if uploadResp.Payload != nil && uploadResp.Payload.RealMetadata != nil {
+	if uploadResp.Payload.RealMetadata != nil {
 		realFBID = uploadResp.Payload.RealMetadata.GetFbId()
 	}
 	if realFBID == 0 {
@@ -65,7 +66,8 @@ func (c *Client) SendMedia(ctx context.Context, threadID int64, data []byte, fil
 		SyncGroup:       1,
 		Otid:            methods.GenerateEpochID(),
 	}
-	return c.client.ExecuteTask(ctx, task)
+	_, err = c.client.ExecuteTask(ctx, task)
+	return err
 }
 
 func (c *Client) GetSelfID() int64 {
