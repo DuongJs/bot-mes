@@ -167,7 +167,7 @@ func handleMessage(msg *commands.WrappedMessage) {
 		// Try to download media
 		medias, err := media.GetMedia(context.Background(), urlMatch)
 		if err == nil && len(medias) > 0 {
-			logger.Info().Str("url", urlMatch).Int("count", len(medias)).Msg("Auto-detected media URL")
+			logger.Info().Str("url", urlMatch).Int("count", len(medias)).Msg("Auto-detected media from URL")
 
 			type uploadResult struct {
 				fbID int64

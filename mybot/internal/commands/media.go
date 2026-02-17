@@ -40,13 +40,8 @@ func (c *MediaCommand) Run(ctx *Context) error {
 	}
 
 	// Process media items concurrently
-	type uploadResult struct {
-		fbID int64
-		idx  int
-	}
-
 	var wg sync.WaitGroup
-	results := make(chan uploadResult, len(medias))
+	results := make(chan int64, len(medias))
 
 	for i, m := range medias {
 		wg.Add(1)
@@ -55,6 +50,7 @@ func (c *MediaCommand) Run(ctx *Context) error {
 
 			data, mime, err := media.DownloadMedia(item.URL)
 			if err != nil {
+				c.sendMessage(ctx, fmt.Sprintf("Failed to download media #%d: %v", idx+1, err))
 				return
 			}
 
@@ -64,6 +60,7 @@ func (c *MediaCommand) Run(ctx *Context) error {
 				MediaData: data,
 			})
 			if err != nil {
+				c.sendMessage(ctx, fmt.Sprintf("Failed to upload media #%d: %v", idx+1, err))
 				return
 			}
 
@@ -72,7 +69,7 @@ func (c *MediaCommand) Run(ctx *Context) error {
 				realFBID = uploadResp.Payload.RealMetadata.GetFbId()
 			}
 			if realFBID != 0 {
-				results <- uploadResult{fbID: realFBID, idx: idx}
+				results <- realFBID
 			}
 		}(i, m)
 	}
@@ -82,11 +79,10 @@ func (c *MediaCommand) Run(ctx *Context) error {
 		close(results)
 	}()
 
-	for r := range results {
-		_ = r.idx
+	for fbID := range results {
 		task := &socket.SendMessageTask{
 			ThreadId:        ctx.Message.ThreadKey,
-			AttachmentFBIds: []int64{r.fbID},
+			AttachmentFBIds: []int64{fbID},
 			Source:          table.MESSENGER_INBOX_IN_THREAD,
 			SendType:        table.MEDIA,
 			SyncGroup:       1,
