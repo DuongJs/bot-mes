@@ -72,7 +72,7 @@ func (c *Client) SendMercuryUploadRequest(ctx context.Context, threadID int64, m
 			return nil, err
 		}
 		c.Logger.Err(err).
-			Str("url", url).
+			Str("url", sanitizeURLForLog(url)).
 			Msg("Mercury response parsing failed, retrying")
 		time.Sleep(time.Duration(attempts) * 3 * time.Second)
 	}
