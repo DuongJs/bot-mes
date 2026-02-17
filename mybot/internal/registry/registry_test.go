@@ -1,16 +1,24 @@
-package commands
+package registry
 
 import (
 	"context"
 	"testing"
 	"time"
+
+	"mybot/internal/core"
 )
 
+type MockCommand struct{}
+func (c *MockCommand) Name() string { return "ping" }
+func (c *MockCommand) Description() string { return "pong" }
+func (c *MockCommand) Execute(ctx *core.CommandContext) error { return nil }
+
 func TestRegistryExecuteUnknown(t *testing.T) {
-	r := NewRegistry()
-	err := r.Execute("nonexistent", &Context{
-		Ctx:     context.Background(),
-		Message: &WrappedMessage{SenderId: 1},
+	r := New()
+	// No command registered
+	err := r.Execute("nonexistent", &core.CommandContext{
+		Ctx:      context.Background(),
+		SenderID: 1,
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown command")
@@ -18,9 +26,10 @@ func TestRegistryExecuteUnknown(t *testing.T) {
 }
 
 func TestRegistryCooldown(t *testing.T) {
-	r := NewRegistry()
+	r := New()
 	r.DefaultCooldown = 100 * time.Millisecond
 
+	// Manually setting cooldown (exposed for testing or internal use)
 	r.SetCooldown(42, "ping")
 
 	remaining, inCooldown := r.CheckCooldown(42, "ping")
@@ -52,7 +61,7 @@ func TestRegistryCooldown(t *testing.T) {
 }
 
 func TestRegistryCleanCooldowns(t *testing.T) {
-	r := NewRegistry()
+	r := New()
 	r.DefaultCooldown = 50 * time.Millisecond
 
 	r.SetCooldown(1, "a")
@@ -72,20 +81,21 @@ func TestRegistryCleanCooldowns(t *testing.T) {
 }
 
 func TestRegistryList(t *testing.T) {
-	r := NewRegistry()
-	r.Register("ping", &PingCommand{})
+	r := New()
+	cmd := &MockCommand{}
+	r.Register(cmd)
 
 	list := r.List()
 	if _, ok := list["ping"]; !ok {
 		t.Fatal("expected ping in command list")
 	}
-	if list["ping"] != (&PingCommand{}).Description() {
+	if list["ping"] != cmd.Description() {
 		t.Fatalf("unexpected description: %s", list["ping"])
 	}
 }
 
 func TestRegistryCooldownCaseInsensitive(t *testing.T) {
-	r := NewRegistry()
+	r := New()
 	r.DefaultCooldown = 100 * time.Millisecond
 
 	r.SetCooldown(1, "PING")

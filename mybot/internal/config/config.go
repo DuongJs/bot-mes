@@ -18,6 +18,9 @@ type Config struct {
 
 	// Cookie values (parsed or manual)
 	Cookies map[string]string `json:"cookies"`
+
+	// Modules feature toggles
+	Modules map[string]bool `json:"modules"`
 }
 
 func New() *Config {
@@ -25,6 +28,7 @@ func New() *Config {
 		CommandPrefix: "!",
 		Port:          "8080",
 		Cookies:       make(map[string]string),
+		Modules:       make(map[string]bool),
 	}
 }
 
@@ -132,5 +136,6 @@ func (c *Config) Update(newCfg *Config) {
 	c.Port = newCfg.Port
 	c.CookieString = newCfg.CookieString
 	c.Cookies = newCfg.Cookies
+	c.Modules = newCfg.Modules
 	c.mergeCookieString()
 }

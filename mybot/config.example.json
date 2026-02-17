@@ -7,5 +7,12 @@
     "xs": "",
     "fr": "",
     "datr": ""
+  },
+  "modules": {
+    "ping": true,
+    "media": true,
+    "help": true,
+    "uptime": true,
+    "info": true
   }
 }
