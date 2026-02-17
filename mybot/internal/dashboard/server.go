@@ -13,26 +13,40 @@ import (
 //go:embed index.html
 var content embed.FS
 
+// CommandLister provides a list of registered commands and their descriptions.
+type CommandLister interface {
+	List() map[string]string
+}
+
+// Server serves the dashboard UI and API endpoints.
 type Server struct {
 	Config    *config.Config
 	StartTime time.Time
 	Restart   func()
+	Commands  CommandLister
+	Logs      *LogBuffer
 }
 
+// New creates a new dashboard server.
 func New(cfg *config.Config, restartFunc func()) *Server {
 	return &Server{
 		Config:    cfg,
 		StartTime: time.Now(),
 		Restart:   restartFunc,
+		Logs:      NewLogBuffer(500),
 	}
 }
 
+// Start starts the dashboard HTTP server on the given port.
 func (s *Server) Start(port string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/restart", s.handleRestart)
+	mux.HandleFunc("/api/commands", s.handleCommands)
+	mux.HandleFunc("/api/modules", s.handleModules)
+	mux.HandleFunc("/api/logs", s.handleLogs)
 
 	go func() {
 		srv := &http.Server{
@@ -105,4 +119,54 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 		go s.Restart()
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if s.Commands != nil {
+		json.NewEncoder(w).Encode(s.Commands.List())
+	} else {
+		json.NewEncoder(w).Encode(map[string]string{})
+	}
+}
+
+func (s *Server) handleModules(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(s.Config.Modules)
+	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		var modules map[string]bool
+		if err := json.NewDecoder(r.Body).Decode(&modules); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.Config.UpdateModules(modules)
+		if err := s.Config.Save("config.json"); err != nil {
+			http.Error(w, "Failed to save config", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if s.Logs != nil {
+		json.NewEncoder(w).Encode(s.Logs.Entries())
+	} else {
+		json.NewEncoder(w).Encode([]LogEntry{})
+	}
 }

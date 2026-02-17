@@ -139,3 +139,10 @@ func (c *Config) Update(newCfg *Config) {
 	c.Modules = newCfg.Modules
 	c.mergeCookieString()
 }
+
+// UpdateModules updates only the Modules map.
+func (c *Config) UpdateModules(modules map[string]bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Modules = modules
+}

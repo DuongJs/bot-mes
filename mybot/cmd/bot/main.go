@@ -122,6 +122,7 @@ func main() {
 		logger.Info().Msg("Restart triggered from dashboard")
 		restartChan <- struct{}{}
 	})
+	dash.Commands = cmds
 	dash.Start(cfg.Port)
 
 	for {

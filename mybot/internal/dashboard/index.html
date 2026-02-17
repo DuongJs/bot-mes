@@ -1,103 +1,488 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bot Dashboard</title>
-    <style>
-        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f4f4f4; }
-        .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        h2 { margin-top: 0; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="text"], textarea { width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        textarea { height: 100px; font-family: monospace; }
-        button { background-color: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px; }
-        button:hover { background-color: #0056b3; }
-        button.danger { background-color: #dc3545; }
-        button.danger:hover { background-color: #c82333; }
-        #status-indicator { font-weight: bold; color: green; }
-        .hint { font-size: 12px; color: #666; margin-top: -10px; margin-bottom: 15px; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bot Dashboard</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f1f5f9;--bg-card:#fff;--bg-sidebar:#fff;--text:#1e293b;--text-secondary:#64748b;
+  --border:#e2e8f0;--primary:#3b82f6;--primary-hover:#2563eb;--success:#22c55e;
+  --danger:#ef4444;--danger-hover:#dc2626;--warn:#f59e0b;--shadow:0 1px 3px rgba(0,0,0,.1),0 1px 2px rgba(0,0,0,.06);
+  --shadow-lg:0 4px 6px rgba(0,0,0,.07),0 2px 4px rgba(0,0,0,.06);--radius:10px;--sidebar-w:260px;
+  --input-bg:#fff;--input-border:#cbd5e1;--toggle-bg:#cbd5e1;--hover-bg:#f8fafc;
+  --log-bg:#f8fafc;--badge-bg:#e0f2fe;--badge-text:#0369a1;
+}
+[data-theme="dark"]{
+  --bg:#0f172a;--bg-card:#1e293b;--bg-sidebar:#1e293b;--text:#e2e8f0;--text-secondary:#94a3b8;
+  --border:#334155;--shadow:0 1px 3px rgba(0,0,0,.3);--shadow-lg:0 4px 6px rgba(0,0,0,.3);
+  --input-bg:#334155;--input-border:#475569;--toggle-bg:#475569;--hover-bg:#334155;
+  --log-bg:#0f172a;--badge-bg:#1e3a5f;--badge-text:#7dd3fc;
+}
+html{font-size:15px}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;transition:background .3s,color .3s}
+
+/* Sidebar */
+.sidebar{width:var(--sidebar-w);background:var(--bg-sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:100;transition:transform .3s,background .3s}
+.sidebar-header{padding:20px 20px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
+.sidebar-header h1{font-size:1.15rem;font-weight:700}
+.sidebar nav{flex:1;padding:12px 10px;display:flex;flex-direction:column;gap:2px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:8px;cursor:pointer;font-size:.92rem;font-weight:500;color:var(--text-secondary);transition:all .15s;border:none;background:none;width:100%;text-align:left}
+.nav-item:hover{background:var(--hover-bg);color:var(--text)}
+.nav-item.active{background:var(--primary);color:#fff}
+.sidebar-footer{padding:14px 16px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.theme-btn{background:none;border:1px solid var(--border);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:1.1rem;color:var(--text);transition:all .15s}
+.theme-btn:hover{background:var(--hover-bg)}
+
+/* Hamburger */
+.hamburger{display:none;position:fixed;top:14px;left:14px;z-index:200;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 10px;cursor:pointer;font-size:1.3rem;line-height:1;color:var(--text)}
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:90}
+
+/* Main */
+.main{margin-left:var(--sidebar-w);flex:1;padding:28px 32px;min-height:100vh;transition:margin .3s}
+.page{display:none}
+.page.active{display:block}
+.page-title{font-size:1.5rem;font-weight:700;margin-bottom:20px}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:22px;margin-bottom:18px;box-shadow:var(--shadow);transition:background .3s,border .3s}
+.card h3{font-size:1rem;font-weight:600;margin-bottom:14px}
+
+/* Stats grid */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:18px}
+.stat-card{display:flex;align-items:center;gap:14px}
+.stat-icon{font-size:2rem;line-height:1}
+.stat-info .stat-value{font-size:1.5rem;font-weight:700}
+.stat-info .stat-label{font-size:.82rem;color:var(--text-secondary)}
+
+/* Status dot */
+.status-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+.status-dot.online{background:var(--success);box-shadow:0 0 6px var(--success)}
+.status-dot.offline{background:var(--danger);box-shadow:0 0 6px var(--danger)}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border:none;border-radius:8px;font-size:.88rem;font-weight:600;cursor:pointer;transition:all .15s}
+.btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-hover)}
+.btn-danger{background:var(--danger);color:#fff}.btn-danger:hover{background:var(--danger-hover)}
+.btn-outline{background:none;border:1px solid var(--border);color:var(--text)}.btn-outline:hover{background:var(--hover-bg)}
+
+/* Table */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);font-size:.9rem}
+th{font-weight:600;color:var(--text-secondary);font-size:.8rem;text-transform:uppercase;letter-spacing:.03em}
+tr:last-child td{border-bottom:none}
+
+/* Module grid */
+.module-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.module-card{display:flex;align-items:center;justify-content:space-between;padding:16px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);transition:all .15s}
+.module-card:hover{box-shadow:var(--shadow-lg)}
+.module-name{font-weight:600;font-size:.92rem}
+
+/* Toggle switch */
+.toggle{position:relative;width:44px;height:24px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;inset:0;background:var(--toggle-bg);border-radius:24px;cursor:pointer;transition:.2s}
+.toggle-slider::before{content:"";position:absolute;height:18px;width:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s}
+.toggle input:checked+.toggle-slider{background:var(--primary)}
+.toggle input:checked+.toggle-slider::before{transform:translateX(20px)}
+
+/* Form */
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-weight:600;font-size:.88rem;margin-bottom:6px}
+.form-group .hint{font-size:.78rem;color:var(--text-secondary);margin-top:4px}
+.form-input,.form-textarea{width:100%;padding:10px 12px;border:1px solid var(--input-border);border-radius:8px;font-size:.9rem;background:var(--input-bg);color:var(--text);transition:border .15s,background .15s}
+.form-input:focus,.form-textarea:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+.form-textarea{min-height:100px;font-family:"SF Mono",Monaco,Consolas,monospace;resize:vertical}
+
+/* Logs */
+.log-container{background:var(--log-bg);border:1px solid var(--border);border-radius:8px;max-height:500px;overflow-y:auto;padding:4px 0;font-family:"SF Mono",Monaco,Consolas,monospace;font-size:.82rem;scroll-behavior:smooth}
+.log-entry{padding:5px 14px;display:flex;gap:12px;border-bottom:1px solid var(--border)}
+.log-entry:last-child{border-bottom:none}
+.log-time{color:var(--text-secondary);white-space:nowrap;min-width:80px}
+.log-level{font-weight:700;text-transform:uppercase;min-width:50px;font-size:.75rem;padding:2px 6px;border-radius:4px;text-align:center;align-self:center}
+.log-level.info{color:#2563eb;background:#dbeafe}
+.log-level.warn{color:#d97706;background:#fef3c7}
+.log-level.error{color:#dc2626;background:#fee2e2}
+[data-theme="dark"] .log-level.info{color:#93c5fd;background:#1e3a5f}
+[data-theme="dark"] .log-level.warn{color:#fcd34d;background:#4a3728}
+[data-theme="dark"] .log-level.error{color:#fca5a5;background:#4a2028}
+.log-msg{flex:1;word-break:break-word}
+.log-toolbar{display:flex;gap:10px;margin-bottom:12px;align-items:center}
+.log-toolbar .badge{font-size:.8rem;padding:3px 10px;border-radius:6px;background:var(--badge-bg);color:var(--badge-text);font-weight:600}
+
+/* Toast */
+.toast-container{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px}
+.toast{padding:12px 20px;border-radius:8px;color:#fff;font-size:.88rem;font-weight:500;animation:slideIn .3s;box-shadow:0 4px 12px rgba(0,0,0,.15);display:flex;align-items:center;gap:8px;max-width:360px}
+.toast.success{background:#16a34a}.toast.error{background:#dc2626}.toast.info{background:#2563eb}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes slideOut{from{transform:translateX(0);opacity:1}to{transform:translateX(100%);opacity:0}}
+
+/* Confirm modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s}
+.modal-overlay.show{opacity:1;pointer-events:auto}
+.modal{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:28px;max-width:400px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.2);transform:scale(.95);transition:transform .2s}
+.modal-overlay.show .modal{transform:scale(1)}
+.modal h3{margin-bottom:10px;font-size:1.1rem}
+.modal p{color:var(--text-secondary);font-size:.9rem;margin-bottom:20px}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end}
+
+/* Responsive */
+@media(max-width:768px){
+  .sidebar{transform:translateX(-100%)}
+  .sidebar.open{transform:translateX(0)}
+  .overlay.open{display:block}
+  .hamburger{display:block}
+  .main{margin-left:0;padding:20px 16px;padding-top:60px}
+  .stats-grid{grid-template-columns:1fr}
+  .module-grid{grid-template-columns:1fr}
+}
+</style>
 </head>
 <body>
-    <h1>🤖 Bot Dashboard</h1>
+<div class="toast-container" id="toastContainer"></div>
 
-    <div class="card">
-        <h2>Status</h2>
-        <p>Status: <span id="status-indicator">Running</span></p>
-        <p>Uptime: <span id="uptime">0s</span></p>
-        <button class="danger" onclick="restartBot()">🔄 Restart Bot</button>
+<div class="modal-overlay" id="confirmModal">
+  <div class="modal">
+    <h3 id="modalTitle">Xác nhận</h3>
+    <p id="modalMsg">Bạn có chắc chắn?</p>
+    <div class="modal-actions">
+      <button class="btn btn-outline" id="modalCancel">Hủy</button>
+      <button class="btn btn-danger" id="modalConfirm">Xác nhận</button>
     </div>
+  </div>
+</div>
 
-    <div class="card">
-        <h2>Configuration</h2>
-        <form id="configForm">
-            <label>Command Prefix</label>
-            <input type="text" id="prefix" name="prefix">
+<button class="hamburger" id="hamburger" aria-label="Menu">☰</button>
+<div class="overlay" id="overlay"></div>
 
-            <label>Cookie String (paste full string here)</label>
-            <textarea id="cookieString" name="cookieString" placeholder="c_user=123;xs=abc;fr=def;datr=ghi|ACCESS_TOKEN"></textarea>
-            <p class="hint">Format: c_user=...;xs=...;fr=...;datr=...|ACCESS_TOKEN (the |token part is optional)</p>
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <span style="font-size:1.5rem">🤖</span>
+    <h1>Bot Dashboard</h1>
+  </div>
+  <nav>
+    <button class="nav-item active" data-page="overview">📊 Tổng quan</button>
+    <button class="nav-item" data-page="commands">⚡ Lệnh</button>
+    <button class="nav-item" data-page="modules">🧩 Modules</button>
+    <button class="nav-item" data-page="config">⚙️ Cấu hình</button>
+    <button class="nav-item" data-page="logs">📋 Nhật ký</button>
+  </nav>
+  <div class="sidebar-footer">
+    <span style="font-size:.82rem;color:var(--text-secondary)">Bot Panel v2</span>
+    <button class="theme-btn" id="themeToggle" aria-label="Chuyển giao diện">🌙</button>
+  </div>
+</aside>
 
-            <label>Cookies (JSON - auto-filled from cookie string)</label>
-            <textarea id="cookies" name="cookies"></textarea>
-
-            <button type="button" onclick="saveConfig()">💾 Save Config</button>
-        </form>
+<main class="main">
+  <!-- Overview -->
+  <section class="page active" id="page-overview">
+    <h2 class="page-title">📊 Tổng quan</h2>
+    <div class="stats-grid">
+      <div class="card stat-card">
+        <div class="stat-icon">💚</div>
+        <div class="stat-info">
+          <div class="stat-value"><span class="status-dot online" id="statusDot"></span><span id="statusText">Đang chạy</span></div>
+          <div class="stat-label">Trạng thái</div>
+        </div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-icon">⏱️</div>
+        <div class="stat-info">
+          <div class="stat-value" id="uptimeValue">--</div>
+          <div class="stat-label">Thời gian hoạt động</div>
+        </div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-icon">⚡</div>
+        <div class="stat-info">
+          <div class="stat-value" id="cmdCount">0</div>
+          <div class="stat-label">Số lệnh</div>
+        </div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-icon">🧩</div>
+        <div class="stat-info">
+          <div class="stat-value" id="moduleCount">0</div>
+          <div class="stat-label">Module đang bật</div>
+        </div>
+      </div>
     </div>
+    <div class="card">
+      <h3>Hành động nhanh</h3>
+      <button class="btn btn-danger" id="restartBtn">🔄 Khởi động lại Bot</button>
+    </div>
+  </section>
 
-    <script>
-        async function loadStatus() {
-            try {
-                const res = await fetch('/api/status');
-                const data = await res.json();
-                document.getElementById('uptime').innerText = data.uptime;
-                document.getElementById('status-indicator').innerText = 'Running';
-            } catch(e) {
-                document.getElementById('status-indicator').innerText = 'Offline';
-            }
-        }
+  <!-- Commands -->
+  <section class="page" id="page-commands">
+    <h2 class="page-title">⚡ Danh sách lệnh</h2>
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Lệnh</th><th>Mô tả</th></tr></thead>
+          <tbody id="cmdTableBody"><tr><td colspan="2" style="text-align:center;color:var(--text-secondary)">Đang tải...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
 
-        async function loadConfig() {
-            const res = await fetch('/api/config');
-            const data = await res.json();
-            document.getElementById('prefix').value = data.command_prefix;
-            document.getElementById('cookieString').value = data.cookie_string || '';
-            document.getElementById('cookies').value = JSON.stringify(data.cookies, null, 2);
-        }
+  <!-- Modules -->
+  <section class="page" id="page-modules">
+    <h2 class="page-title">🧩 Quản lý Modules</h2>
+    <div class="card">
+      <div class="module-grid" id="moduleGrid">
+        <div style="color:var(--text-secondary)">Đang tải...</div>
+      </div>
+      <div style="margin-top:18px;display:flex;gap:10px">
+        <button class="btn btn-primary" id="saveModulesBtn">💾 Lưu thay đổi</button>
+      </div>
+    </div>
+  </section>
 
-        async function saveConfig() {
-            const prefix = document.getElementById('prefix').value;
-            const cookieString = document.getElementById('cookieString').value.trim();
-            const cookiesStr = document.getElementById('cookies').value;
-            try {
-                const cookies = JSON.parse(cookiesStr);
-                await fetch('/api/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        command_prefix: prefix,
-                        cookie_string: cookieString,
-                        cookies: cookies
-                    })
-                });
-                alert('Config saved! Restart bot to apply changes.');
-                loadConfig();
-            } catch (e) {
-                alert('Invalid JSON in cookies field');
-            }
-        }
+  <!-- Config -->
+  <section class="page" id="page-config">
+    <h2 class="page-title">⚙️ Cấu hình</h2>
+    <div class="card">
+      <div class="form-group">
+        <label for="cfgPrefix">Tiền tố lệnh</label>
+        <input class="form-input" id="cfgPrefix" type="text" placeholder="!">
+      </div>
+      <div class="form-group">
+        <label for="cfgPort">Cổng (Port)</label>
+        <input class="form-input" id="cfgPort" type="text" placeholder="8080">
+      </div>
+      <div class="form-group">
+        <label for="cfgCookieStr">Cookie String</label>
+        <textarea class="form-textarea" id="cfgCookieStr" placeholder="c_user=...;xs=...;fr=...;datr=...|ACCESS_TOKEN"></textarea>
+        <div class="hint">Định dạng: c_user=...;xs=...;fr=...;datr=...|ACCESS_TOKEN (phần |token là tùy chọn)</div>
+      </div>
+      <div class="form-group">
+        <label for="cfgCookies">Cookies (JSON)</label>
+        <textarea class="form-textarea" id="cfgCookies" placeholder='{"c_user":"","xs":"","fr":"","datr":""}'></textarea>
+      </div>
+      <button class="btn btn-primary" id="saveConfigBtn">💾 Lưu cấu hình</button>
+    </div>
+  </section>
 
-        async function restartBot() {
-            if (confirm('Are you sure you want to restart the bot?')) {
-                await fetch('/api/restart', { method: 'POST' });
-                alert('Bot is restarting...');
-            }
-        }
+  <!-- Logs -->
+  <section class="page" id="page-logs">
+    <h2 class="page-title">📋 Nhật ký hệ thống</h2>
+    <div class="card">
+      <div class="log-toolbar">
+        <span class="badge" id="logCountBadge">0 dòng</span>
+        <div style="flex:1"></div>
+        <button class="btn btn-outline" id="logPauseBtn">⏸️ Tạm dừng</button>
+        <button class="btn btn-outline" id="logClearBtn">🗑️ Xóa</button>
+      </div>
+      <div class="log-container" id="logContainer">
+        <div style="padding:20px;text-align:center;color:var(--text-secondary)">Đang tải nhật ký...</div>
+      </div>
+    </div>
+  </section>
+</main>
 
-        loadStatus();
-        loadConfig();
-        setInterval(loadStatus, 5000);
-    </script>
+<script>
+(function(){
+"use strict";
+
+/* --- Theme --- */
+const html = document.documentElement;
+const themeBtn = document.getElementById("themeToggle");
+const stored = localStorage.getItem("theme");
+if(stored){html.setAttribute("data-theme",stored);themeBtn.textContent=stored==="dark"?"☀️":"🌙"}
+themeBtn.addEventListener("click",()=>{
+  const d=html.getAttribute("data-theme")==="dark";
+  html.setAttribute("data-theme",d?"light":"dark");
+  themeBtn.textContent=d?"🌙":"☀️";
+  localStorage.setItem("theme",d?"light":"dark");
+});
+
+/* --- Sidebar nav --- */
+const navItems=document.querySelectorAll(".nav-item");
+const pages=document.querySelectorAll(".page");
+const sidebar=document.getElementById("sidebar");
+const hamburger=document.getElementById("hamburger");
+const overlay=document.getElementById("overlay");
+
+function switchPage(name){
+  navItems.forEach(n=>{n.classList.toggle("active",n.dataset.page===name)});
+  pages.forEach(p=>{p.classList.toggle("active",p.id==="page-"+name)});
+  sidebar.classList.remove("open");overlay.classList.remove("open");
+}
+navItems.forEach(n=>n.addEventListener("click",()=>switchPage(n.dataset.page)));
+hamburger.addEventListener("click",()=>{sidebar.classList.add("open");overlay.classList.add("open")});
+overlay.addEventListener("click",()=>{sidebar.classList.remove("open");overlay.classList.remove("open")});
+
+/* --- Toast --- */
+const toastBox=document.getElementById("toastContainer");
+function toast(msg,type="info"){
+  const el=document.createElement("div");
+  el.className="toast "+type;
+  const icons={success:"✅",error:"❌",info:"ℹ️"};
+  el.textContent=(icons[type]||"")+" "+msg;
+  toastBox.appendChild(el);
+  setTimeout(()=>{el.style.animation="slideOut .3s forwards";setTimeout(()=>el.remove(),300)},3000);
+}
+
+/* --- Confirm modal --- */
+function confirmDialog(title,msg){
+  return new Promise(resolve=>{
+    const mo=document.getElementById("confirmModal");
+    document.getElementById("modalTitle").textContent=title;
+    document.getElementById("modalMsg").textContent=msg;
+    mo.classList.add("show");
+    function cleanup(val){mo.classList.remove("show");resolve(val)}
+    function onOk(){cleanup(true)}function onCancel(){cleanup(false)}
+    document.getElementById("modalConfirm").addEventListener("click",onOk,{once:true});
+    document.getElementById("modalCancel").addEventListener("click",onCancel,{once:true});
+  });
+}
+
+/* --- API helpers --- */
+async function api(url,opts){
+  const res=await fetch(url,opts);
+  if(!res.ok)throw new Error("HTTP "+res.status);
+  const ct=res.headers.get("content-type")||"";
+  if(ct.includes("json"))return res.json();
+  return null;
+}
+
+/* --- Status --- */
+const statusDot=document.getElementById("statusDot");
+const statusText=document.getElementById("statusText");
+const uptimeEl=document.getElementById("uptimeValue");
+async function loadStatus(){
+  try{
+    const d=await api("/api/status");
+    uptimeEl.textContent=d.uptime;
+    statusDot.className="status-dot online";
+    statusText.textContent="Đang chạy";
+  }catch{
+    statusDot.className="status-dot offline";
+    statusText.textContent="Ngoại tuyến";
+    uptimeEl.textContent="--";
+  }
+}
+
+/* --- Commands --- */
+const cmdBody=document.getElementById("cmdTableBody");
+const cmdCountEl=document.getElementById("cmdCount");
+async function loadCommands(){
+  try{
+    const d=await api("/api/commands");
+    const entries=Object.entries(d);
+    cmdCountEl.textContent=entries.length;
+    if(!entries.length){cmdBody.innerHTML='<tr><td colspan="2" style="text-align:center;color:var(--text-secondary)">Chưa có lệnh nào</td></tr>';return}
+    cmdBody.innerHTML=entries.map(([k,v])=>`<tr><td><code style="background:var(--badge-bg);color:var(--badge-text);padding:2px 8px;border-radius:4px;font-size:.85rem">${esc(k)}</code></td><td>${esc(v)}</td></tr>`).join("");
+  }catch{cmdBody.innerHTML='<tr><td colspan="2" style="text-align:center;color:var(--danger)">Lỗi tải lệnh</td></tr>'}
+}
+
+/* --- Modules --- */
+const moduleGrid=document.getElementById("moduleGrid");
+const moduleCountEl=document.getElementById("moduleCount");
+let moduleState={};
+async function loadModules(){
+  try{
+    const d=await api("/api/modules");
+    moduleState={...d};
+    renderModules();
+  }catch{moduleGrid.innerHTML='<div style="color:var(--danger)">Lỗi tải modules</div>'}
+}
+function renderModules(){
+  const entries=Object.entries(moduleState);
+  moduleCountEl.textContent=entries.filter(([,v])=>v).length;
+  if(!entries.length){moduleGrid.innerHTML='<div style="color:var(--text-secondary)">Chưa có module nào</div>';return}
+  moduleGrid.innerHTML=entries.map(([k,v])=>`
+    <div class="module-card">
+      <span class="module-name">${esc(k)}</span>
+      <label class="toggle"><input type="checkbox" data-mod="${esc(k)}" ${v?"checked":""}><span class="toggle-slider"></span></label>
+    </div>`).join("");
+  moduleGrid.querySelectorAll("input[type=checkbox]").forEach(cb=>{
+    cb.addEventListener("change",()=>{moduleState[cb.dataset.mod]=cb.checked;moduleCountEl.textContent=Object.values(moduleState).filter(Boolean).length});
+  });
+}
+document.getElementById("saveModulesBtn").addEventListener("click",async()=>{
+  try{
+    await api("/api/modules",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(moduleState)});
+    toast("Đã lưu modules thành công!","success");
+  }catch{toast("Lỗi khi lưu modules","error")}
+});
+
+/* --- Config --- */
+const cfgPrefix=document.getElementById("cfgPrefix");
+const cfgPort=document.getElementById("cfgPort");
+const cfgCookieStr=document.getElementById("cfgCookieStr");
+const cfgCookies=document.getElementById("cfgCookies");
+async function loadConfig(){
+  try{
+    const d=await api("/api/config");
+    cfgPrefix.value=d.command_prefix||"";
+    cfgPort.value=d.port||"";
+    cfgCookieStr.value=d.cookie_string||"";
+    cfgCookies.value=d.cookies?JSON.stringify(d.cookies,null,2):"";
+  }catch{toast("Lỗi tải cấu hình","error")}
+}
+document.getElementById("saveConfigBtn").addEventListener("click",async()=>{
+  let cookies;
+  try{cookies=JSON.parse(cfgCookies.value||"{}")}catch{toast("JSON cookies không hợp lệ","error");return}
+  try{
+    await api("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      command_prefix:cfgPrefix.value,
+      port:cfgPort.value,
+      cookie_string:cfgCookieStr.value.trim(),
+      cookies:cookies
+    })});
+    toast("Đã lưu cấu hình! Khởi động lại bot để áp dụng.","success");
+    loadConfig();
+  }catch{toast("Lỗi khi lưu cấu hình","error")}
+});
+
+/* --- Restart --- */
+document.getElementById("restartBtn").addEventListener("click",async()=>{
+  const ok=await confirmDialog("Khởi động lại Bot","Bạn có chắc chắn muốn khởi động lại bot?");
+  if(!ok)return;
+  try{await api("/api/restart",{method:"POST"});toast("Bot đang khởi động lại...","info")}catch{toast("Lỗi khi khởi động lại","error")}
+});
+
+/* --- Logs --- */
+const logContainer=document.getElementById("logContainer");
+const logCountBadge=document.getElementById("logCountBadge");
+let logsPaused=false;
+let logsData=[];
+const logPauseBtn=document.getElementById("logPauseBtn");
+logPauseBtn.addEventListener("click",()=>{
+  logsPaused=!logsPaused;
+  logPauseBtn.textContent=logsPaused?"▶️ Tiếp tục":"⏸️ Tạm dừng";
+});
+document.getElementById("logClearBtn").addEventListener("click",()=>{logsData=[];renderLogs()});
+
+async function loadLogs(){
+  if(logsPaused)return;
+  try{
+    const d=await api("/api/logs");
+    if(Array.isArray(d)){logsData=d;renderLogs()}
+  }catch{/* silent */}
+}
+function renderLogs(){
+  logCountBadge.textContent=logsData.length+" dòng";
+  if(!logsData.length){logContainer.innerHTML='<div style="padding:20px;text-align:center;color:var(--text-secondary)">Chưa có nhật ký</div>';return}
+  const atBottom=logContainer.scrollHeight-logContainer.scrollTop-logContainer.clientHeight<50;
+  logContainer.innerHTML=logsData.map(e=>{
+    let t="";try{t=e.time?new Date(e.time).toLocaleTimeString("vi-VN"):""}catch{t=e.time||""}
+    const lvl=(e.level||"info").toLowerCase();
+    return `<div class="log-entry"><span class="log-time">${esc(t)}</span><span class="log-level ${lvl}">${esc(lvl)}</span><span class="log-msg">${esc(e.message||"")}</span></div>`;
+  }).join("");
+  if(atBottom)logContainer.scrollTop=logContainer.scrollHeight;
+}
+
+/* --- Escape --- */
+function esc(s){const d=document.createElement("div");d.textContent=s;return d.innerHTML}
+
+/* --- Init --- */
+loadStatus();loadCommands();loadModules();loadConfig();loadLogs();
+setInterval(loadStatus,5000);
+setInterval(loadLogs,3000);
+})();
+</script>
 </body>
 </html>
