@@ -1,0 +1,31 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Build output
+/mybot/bot
+mybot/release/
+
+# Config files with secrets
+mybot/config.json
+
+# Go test binary
+*.test
+
+# Go coverage
+*.out
+*.prof
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

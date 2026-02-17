@@ -11,11 +11,12 @@
         label { display: block; margin-bottom: 5px; font-weight: bold; }
         input[type="text"], textarea { width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
         textarea { height: 100px; font-family: monospace; }
-        button { background-color: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; }
+        button { background-color: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px; }
         button:hover { background-color: #0056b3; }
         button.danger { background-color: #dc3545; }
         button.danger:hover { background-color: #c82333; }
         #status-indicator { font-weight: bold; color: green; }
+        .hint { font-size: 12px; color: #666; margin-top: -10px; margin-bottom: 15px; }
     </style>
 </head>
 <body>
@@ -34,7 +35,11 @@
             <label>Command Prefix</label>
             <input type="text" id="prefix" name="prefix">
 
-            <label>Cookies (JSON format)</label>
+            <label>Cookie String (paste full string here)</label>
+            <textarea id="cookieString" name="cookieString" placeholder="c_user=123;xs=abc;fr=def;datr=ghi|ACCESS_TOKEN"></textarea>
+            <p class="hint">Format: c_user=...;xs=...;fr=...;datr=...|ACCESS_TOKEN (the |token part is optional)</p>
+
+            <label>Cookies (JSON - auto-filled from cookie string)</label>
             <textarea id="cookies" name="cookies"></textarea>
 
             <button type="button" onclick="saveConfig()">💾 Save Config</button>
@@ -43,32 +48,43 @@
 
     <script>
         async function loadStatus() {
-            const res = await fetch('/api/status');
-            const data = await res.json();
-            document.getElementById('uptime').innerText = data.uptime;
-            document.getElementById('status-indicator').innerText = 'Running'; 
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                document.getElementById('uptime').innerText = data.uptime;
+                document.getElementById('status-indicator').innerText = 'Running';
+            } catch(e) {
+                document.getElementById('status-indicator').innerText = 'Offline';
+            }
         }
 
         async function loadConfig() {
             const res = await fetch('/api/config');
             const data = await res.json();
             document.getElementById('prefix').value = data.command_prefix;
+            document.getElementById('cookieString').value = data.cookie_string || '';
             document.getElementById('cookies').value = JSON.stringify(data.cookies, null, 2);
         }
 
         async function saveConfig() {
             const prefix = document.getElementById('prefix').value;
+            const cookieString = document.getElementById('cookieString').value.trim();
             const cookiesStr = document.getElementById('cookies').value;
             try {
                 const cookies = JSON.parse(cookiesStr);
                 await fetch('/api/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ command_prefix: prefix, cookies: cookies })
+                    body: JSON.stringify({
+                        command_prefix: prefix,
+                        cookie_string: cookieString,
+                        cookies: cookies
+                    })
                 });
-                alert('Config saved!');
+                alert('Config saved! Restart bot to apply changes.');
+                loadConfig();
             } catch (e) {
-                alert('Invalid JSON in cookies');
+                alert('Invalid JSON in cookies field');
             }
         }
 

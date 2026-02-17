@@ -3,6 +3,7 @@ package dashboard
 import (
 	"embed"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
@@ -27,47 +28,79 @@ func New(cfg *config.Config, restartFunc func()) *Server {
 }
 
 func (s *Server) Start(port string) {
-	http.HandleFunc("/", s.handleIndex)
-	http.HandleFunc("/api/status", s.handleStatus)
-	http.HandleFunc("/api/config", s.handleConfig)
-	http.HandleFunc("/api/restart", s.handleRestart)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/config", s.handleConfig)
+	mux.HandleFunc("/api/restart", s.handleRestart)
 
 	go func() {
-		if err := http.ListenAndServe(":"+port, nil); err != nil {
-			panic(err)
+		srv := &http.Server{
+			Addr:         ":" + port,
+			Handler:      mux,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 10 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("Dashboard server error: %v", err)
 		}
 	}()
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	data, _ := content.ReadFile("index.html")
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	data, err := content.ReadFile("index.html")
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 	w.Write(data)
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"uptime": time.Since(s.StartTime).String(),
 	})
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
+	switch r.Method {
+	case http.MethodPost:
 		var newCfg config.Config
 		if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		s.Config.Update(&newCfg)
-		s.Config.Save("config.json")
-		return
+		if err := s.Config.Save("config.json"); err != nil {
+			http.Error(w, "Failed to save config", http.StatusInternalServerError)
+			return
+		}
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(s.Config)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
-	json.NewEncoder(w).Encode(s.Config)
 }
 
 func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
-		if s.Restart != nil {
-			go s.Restart()
-		}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
+	if s.Restart != nil {
+		go s.Restart()
+	}
+	w.WriteHeader(http.StatusOK)
 }

@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix"
 )
@@ -15,9 +16,10 @@ type WrappedMessage struct {
 }
 
 type Context struct {
-	Client  *messagix.Client
-	Message *WrappedMessage
-	Args    []string
+	Client    *messagix.Client
+	Message   *WrappedMessage
+	Args      []string
+	StartTime time.Time
 }
 
 type Command interface {

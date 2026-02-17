@@ -8,6 +8,12 @@ import (
 	"strings"
 )
 
+const maxDownloadSize = 50 * 1024 * 1024 // 50 MB
+
+var httpClient = &http.Client{
+	Timeout: FetchTimeout,
+}
+
 func GetMedia(ctx context.Context, url string) ([]MediaItem, error) {
 	if strings.Contains(url, "instagram.com") {
 		return GetInstagramMedia(ctx, url)
@@ -26,7 +32,7 @@ func GetMedia(ctx context.Context, url string) ([]MediaItem, error) {
 }
 
 func DownloadMedia(url string) ([]byte, string, error) {
-	resp, err := http.Get(url)
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		return nil, "", err
 	}
@@ -36,7 +42,7 @@ func DownloadMedia(url string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("failed to download media: %s", resp.Status)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize))
 	if err != nil {
 		return nil, "", err
 	}
