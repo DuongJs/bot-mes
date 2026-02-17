@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const maxDownloadSize = 50 * 1024 * 1024 // 50 MB
+const maxDownloadSize = 25 * 1000 * 1000 // 25 MB – aligned with Facebook's upload limit
 
 var httpClient = &http.Client{
 	Timeout: FetchTimeout,

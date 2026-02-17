@@ -40,7 +40,12 @@ func (c *Client) SendMessage(ctx context.Context, threadID int64, text string) e
 	return err
 }
 
+const maxUploadSize = 25 * 1000 * 1000 // 25 MB – Facebook's Mercury upload limit
+
 func (c *Client) SendMedia(ctx context.Context, threadID int64, data []byte, filename, mimeType string) error {
+	if len(data) > maxUploadSize {
+		return fmt.Errorf("file too large (%d bytes, max %d)", len(data), maxUploadSize)
+	}
 	uploadResp, err := c.client.SendMercuryUploadRequest(ctx, threadID, &messagix.MercuryUploadMedia{
 		Filename:  filename,
 		MimeType:  mimeType,
