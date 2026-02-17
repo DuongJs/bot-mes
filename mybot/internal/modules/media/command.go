@@ -24,7 +24,7 @@ func (c *Command) Name() string {
 }
 
 func (c *Command) Description() string {
-	return "Tải media từ Facebook, TikTok, Instagram"
+	return "Tải media từ Facebook, TikTok, Douyin, Instagram"
 }
 
 func (c *Command) Execute(ctx *core.CommandContext) error {

@@ -263,6 +263,7 @@ func handleMessage(msg *WrappedMessage) {
 	if mediaService != nil {
 		urlMatch := urlRegex.FindString(msg.Text)
 		if urlMatch != "" {
+			urlMatch = strings.TrimRight(urlMatch, ".,;:!?\"'()[]{}><")
 			processMediaAuto(context.Background(), fbClient, msg.ThreadKey, urlMatch)
 			return
 		}
