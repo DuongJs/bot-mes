@@ -111,6 +111,14 @@ func (c *Client) newHTTPQuery() *HttpQuery {
 
 const MaxHTTPRetries = 5
 
+// sanitizeURLForLog strips query parameters from a URL to avoid logging sensitive/verbose data.
+func sanitizeURLForLog(rawURL string) string {
+	if idx := strings.IndexByte(rawURL, '?'); idx >= 0 {
+		return rawURL[:idx]
+	}
+	return rawURL
+}
+
 var (
 	ErrTokenInvalidated         = errors.New("access token is no longer valid")
 	ErrTokenInvalidatedRedirect = fmt.Errorf("%w: redirected", ErrTokenInvalidated)
@@ -184,9 +192,10 @@ func (c *Client) MakeRequest(ctx context.Context, url string, method string, hea
 		start := time.Now()
 		resp, respDat, err := c.makeRequestDirect(ctx, url, method, headers, payload, contentType)
 		dur := time.Since(start)
+		cleanURL := sanitizeURLForLog(url)
 		if err == nil {
 			c.Logger.Debug().
-				Str("url", url).
+				Str("url", cleanURL).
 				Str("method", method).
 				Dur("duration", dur).
 				Int("status_code", resp.StatusCode).
@@ -194,21 +203,21 @@ func (c *Client) MakeRequest(ctx context.Context, url string, method string, hea
 			return resp, respDat, nil
 		} else if attempts > MaxHTTPRetries {
 			c.Logger.Err(err).
-				Str("url", url).
+				Str("url", cleanURL).
 				Str("method", method).
 				Dur("duration", dur).
 				Msg("Request failed, giving up")
 			return nil, nil, fmt.Errorf("%w: %w", ErrMaxRetriesReached, err)
 		} else if isPermanentRequestError(err) || ctx.Err() != nil {
 			c.Logger.Err(err).
-				Str("url", url).
+				Str("url", cleanURL).
 				Str("method", method).
 				Dur("duration", dur).
 				Msg("Request failed, cannot be retried")
 			return nil, nil, err
 		}
 		c.Logger.Err(err).
-			Str("url", url).
+			Str("url", cleanURL).
 			Str("method", method).
 			Dur("duration", dur).
 			Msg("Request failed, retrying")
