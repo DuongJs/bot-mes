@@ -33,6 +33,9 @@ func GetMedia(ctx context.Context, url string) ([]MediaItem, error) {
 	if strings.Contains(url, "tiktok.com") {
 		return GetTikTokMedia(ctx, url)
 	}
+	if strings.Contains(url, "douyin.com") || strings.Contains(url, "iesdouyin.com") {
+		return GetDouyinMedia(ctx, url)
+	}
 	if strings.Contains(url, "facebook.com") || strings.Contains(url, "fb.watch") {
 		item, err := GetFacebookVideo(ctx, url)
 		if err != nil {

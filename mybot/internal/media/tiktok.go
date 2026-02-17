@@ -14,7 +14,7 @@ const (
 )
 
 var (
-	awemeIDRegex = regexp.MustCompile(`/video/(\d+)|/photo/(\d+)`)
+	awemeIDRegex = regexp.MustCompile(`/video/(\d+)|/photo/(\d+)|/note/(\d+)`)
 )
 
 type TikTokResponse struct {
@@ -35,12 +35,27 @@ type TikTokResponse struct {
 	} `json:"aweme_list"`
 }
 
+// extractAwemeID extracts the aweme/video ID from a TikTok or Douyin URL.
+func extractAwemeID(url string) string {
+	matches := awemeIDRegex.FindStringSubmatch(url)
+	if len(matches) < 2 {
+		return ""
+	}
+	for _, m := range matches[1:] {
+		if m != "" {
+			return m
+		}
+	}
+	return ""
+}
+
 func GetTikTokMedia(ctx context.Context, url string) ([]MediaItem, error) {
 	// Resolve short URL
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create tiktok request: %w", err)
 	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve tiktok url: %w", err)
@@ -49,18 +64,14 @@ func GetTikTokMedia(ctx context.Context, url string) ([]MediaItem, error) {
 	resp.Body.Close()
 
 	// Extract Aweme ID
-	matches := awemeIDRegex.FindStringSubmatch(finalURL)
-	if len(matches) < 2 {
+	awemeID := extractAwemeID(finalURL)
+	if awemeID == "" {
 		return nil, fmt.Errorf("no aweme_id found in %s", finalURL)
 	}
-	awemeID := matches[1]
-	if awemeID == "" {
-		awemeID = matches[2]
-	}
 
-	// Fetch from API
+	// Fetch from API using OPTIONS method (required by TikTok's API)
 	apiURL := fmt.Sprintf("%s?aweme_id=%s", TikTokAPI, awemeID)
-	apiReq, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	apiReq, err := http.NewRequestWithContext(ctx, "OPTIONS", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create api request: %w", err)
 	}
