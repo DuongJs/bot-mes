@@ -10,7 +10,7 @@ import (
 
 const (
 	TikTokAPI = "https://api16-normal-c-useast2a.tiktokv.com/aweme/v1/feed/"
-	TikTokUA  = "TikTok 35.3.0 rv:353015 (iPhone; iOS 17.5; en_US) Cronet"
+	TikTokUA  = "TikTok 26.2.0 rv:262018 (iPhone; iOS 14.4.2; en_US) Cronet"
 )
 
 var (
@@ -55,7 +55,7 @@ func GetTikTokMedia(ctx context.Context, url string) ([]MediaItem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create tiktok request: %w", err)
 	}
-	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve tiktok url: %w", err)
@@ -69,9 +69,9 @@ func GetTikTokMedia(ctx context.Context, url string) ([]MediaItem, error) {
 		return nil, fmt.Errorf("no aweme_id found in %s", finalURL)
 	}
 
-	// Fetch from API
+	// Fetch from API using OPTIONS method (required by TikTok's API)
 	apiURL := fmt.Sprintf("%s?aweme_id=%s", TikTokAPI, awemeID)
-	apiReq, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	apiReq, err := http.NewRequestWithContext(ctx, "OPTIONS", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create api request: %w", err)
 	}
