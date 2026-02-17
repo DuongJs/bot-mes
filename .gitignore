@@ -9,8 +9,6 @@
 /mybot/bot
 mybot/release/
 
-# Config files with secrets
-mybot/config.json
 
 # Go test binary
 *.test

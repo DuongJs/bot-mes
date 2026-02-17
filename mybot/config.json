@@ -1,0 +1,11 @@
+{
+  "command_prefix": "!",
+  "port": "8080",
+  "cookie_string": "c_user=61581248120082;xs=16:HwwMNsa3FyKhlA:2:1758253542:-1:-1;fr=0PS1MEwHphr6cms2R.AWfgDmmK6iydsg-AL9ObPrnPSIsmFCo_Z811OvRWJWre5_Ao0Xk.BozNHs..AAA.0.0.BozNHs.AWfhmMVRHm2SxiwH9VjEpT2K_e8;datr=5dHMaDdz8w6IaeiJMuw85B5E;|EAAAAUaZA8jlABPWAsLoyfK3wYGZCATFxi8UDg7Ugpd6zKaUHzQ4eFQwFKE29CdZClcEkLujzY4NK4snfA6X2eDROtrzYkBbeNY7ABas1VhmdsMhzmwwuPwtI5rtapA0yY53bMeQajTUgO5SYdIaS0YglYkgO71jaUArHIzCnEMvj3iURtdClZCUV3Qts1m5PgfDZB3wZDZD",
+  "cookies": {
+    "c_user": "",
+    "xs": "",
+    "fr": "",
+    "datr": ""
+  }
+}
