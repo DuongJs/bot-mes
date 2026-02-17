@@ -252,6 +252,7 @@ func handleMessage(msg *commands.WrappedMessage) {
 
 	logger.Info().Str("cmd", cmdName).Msg("Processing command")
 	err := cmds.Execute(cmdName, &commands.Context{
+		Ctx:       context.Background(),
 		Client:    client,
 		Message:   msg,
 		Args:      args,

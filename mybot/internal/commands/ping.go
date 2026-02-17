@@ -1,8 +1,6 @@
 package commands
 
 import (
-	"context"
-
 	"go.mau.fi/mautrix-meta/pkg/messagix/methods"
 	"go.mau.fi/mautrix-meta/pkg/messagix/socket"
 	"go.mau.fi/mautrix-meta/pkg/messagix/table"
@@ -19,7 +17,7 @@ func (c *PingCommand) Run(ctx *Context) error {
 		SyncGroup: 1,
 		Otid:      methods.GenerateEpochID(),
 	}
-	_, err := ctx.Client.ExecuteTask(context.Background(), task)
+	_, err := ctx.Client.ExecuteTask(ctx.Ctx, task)
 	return err
 }
 

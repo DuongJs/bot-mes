@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -8,6 +9,7 @@ import (
 func TestRegistryExecuteUnknown(t *testing.T) {
 	r := NewRegistry()
 	err := r.Execute("nonexistent", &Context{
+		Ctx:     context.Background(),
 		Message: &WrappedMessage{SenderId: 1},
 	})
 	if err == nil {

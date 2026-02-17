@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ type WrappedMessage struct {
 }
 
 type Context struct {
+	Ctx       context.Context
 	Client    *messagix.Client
 	Message   *WrappedMessage
 	Args      []string
