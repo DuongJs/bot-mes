@@ -42,4 +42,4 @@ require (
 	maunium.net/go/mautrix v0.26.3 // indirect
 )
 
-replace go.mau.fi/mautrix-meta => d:/botnew/meta
+replace go.mau.fi/mautrix-meta => ./meta

@@ -2,7 +2,7 @@ module mybot
 
 go 1.25.5
 
-replace go.mau.fi/mautrix-meta => d:/botnew/meta
+replace go.mau.fi/mautrix-meta => ../meta
 
 require (
 	github.com/rs/zerolog v1.34.0

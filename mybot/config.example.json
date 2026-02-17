@@ -1,0 +1,10 @@
+{
+  "command_prefix": "!",
+  "port": "8080",
+  "cookies": {
+    "c_user": "",
+    "xs": "",
+    "fr": "",
+    "datr": ""
+  }
+}

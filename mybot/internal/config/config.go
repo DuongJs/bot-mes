@@ -41,6 +41,12 @@ func Load(path string) (*Config, error) {
 	if cfg.Cookies == nil {
 		cfg.Cookies = make(map[string]string)
 	}
+	if cfg.CommandPrefix == "" {
+		cfg.CommandPrefix = "!"
+	}
+	if cfg.Port == "" {
+		cfg.Port = "8080"
+	}
 	return &cfg, nil
 }
 
