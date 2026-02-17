@@ -123,7 +123,10 @@ func TestHandleModulesGet(t *testing.T) {
 
 func TestHandleModulesPost(t *testing.T) {
 	// Change to temp dir so config.json is written there instead of source tree
-	origDir, _ := os.Getwd()
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	tmpDir := t.TempDir()
 	os.Chdir(tmpDir)
 	defer os.Chdir(origDir)

@@ -18,6 +18,9 @@ type CommandLister interface {
 	List() map[string]string
 }
 
+// maxRequestBodySize is the maximum allowed request body size (1 MB).
+const maxRequestBodySize = 1 << 20
+
 // Server serves the dashboard UI and API endpoints.
 type Server struct {
 	Config    *config.Config
@@ -90,8 +93,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
-		// Limit request body to 1 MB to prevent memory exhaustion
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
 		var newCfg config.Config
 		if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -140,7 +142,7 @@ func (s *Server) handleModules(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(s.Config.Modules)
 	case http.MethodPost:
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
 		var modules map[string]bool
 		if err := json.NewDecoder(r.Body).Decode(&modules); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
