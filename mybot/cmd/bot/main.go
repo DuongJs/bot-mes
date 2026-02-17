@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,10 +24,18 @@ import (
 	"mybot/internal/media"
 )
 
+func initLogger() zerolog.Logger {
+	if os.Getenv("LOG_FORMAT") == "json" {
+		return zerolog.New(os.Stdout).With().Timestamp().Logger()
+	}
+	w := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: "15:04:05"}
+	return zerolog.New(w).With().Timestamp().Logger()
+}
+
 var urlRegex = regexp.MustCompile(`https?://\S+`)
 
 var (
-	logger    = zerolog.New(os.Stdout).With().Timestamp().Logger()
+	logger    zerolog.Logger
 	cfg       *config.Config
 	client    *messagix.Client
 	cmds      *commands.Registry
@@ -34,6 +43,7 @@ var (
 )
 
 func main() {
+	logger = initLogger()
 	startTime = time.Now()
 
 	var err error
@@ -48,6 +58,7 @@ func main() {
 	cmds.Register("media", &commands.MediaCommand{})
 	cmds.Register("uptime", &commands.UptimeCommand{})
 	cmds.Register("about", &commands.AboutCommand{})
+	cmds.Register("status", &commands.StatusCommand{})
 
 	// Setup restart channel
 	restartChan := make(chan struct{})
@@ -156,39 +167,55 @@ func handleMessage(msg *commands.WrappedMessage) {
 		// Try to download media
 		medias, err := media.GetMedia(context.Background(), urlMatch)
 		if err == nil && len(medias) > 0 {
-			logger.Info().Str("url", urlMatch).Msg("Auto-detected media URL")
+			logger.Info().Str("url", urlMatch).Int("count", len(medias)).Msg("Auto-detected media from URL")
+
+			type uploadResult struct {
+				fbID int64
+			}
+			var wg sync.WaitGroup
+			results := make(chan uploadResult, len(medias))
+
 			for _, m := range medias {
-				// Download
-				data, mime, err := media.DownloadMedia(m.URL)
-				if err != nil {
-					logger.Error().Err(err).Msg("Failed to download media")
-					continue
-				}
+				wg.Add(1)
+				go func(item media.MediaItem) {
+					defer wg.Done()
+					data, mime, err := media.DownloadMedia(item.URL)
+					if err != nil {
+						logger.Error().Err(err).Msg("Failed to download media")
+						return
+					}
 
-				// Upload
-				uploadResp, err := client.SendMercuryUploadRequest(context.Background(), msg.ThreadKey, &messagix.MercuryUploadMedia{
-					Filename:  "media",
-					MimeType:  mime,
-					MediaData: data,
-				})
-				if err != nil {
-					logger.Error().Err(err).Msg("Failed to upload media")
-					continue
-				}
+					uploadResp, err := client.SendMercuryUploadRequest(context.Background(), msg.ThreadKey, &messagix.MercuryUploadMedia{
+						Filename:  "media",
+						MimeType:  mime,
+						MediaData: data,
+					})
+					if err != nil {
+						logger.Error().Err(err).Msg("Failed to upload media")
+						return
+					}
 
-				var realFBID int64
-				if uploadResp.Payload.RealMetadata != nil {
-					realFBID = uploadResp.Payload.RealMetadata.GetFbId()
-				}
+					var realFBID int64
+					if uploadResp.Payload.RealMetadata != nil {
+						realFBID = uploadResp.Payload.RealMetadata.GetFbId()
+					}
+					if realFBID != 0 {
+						results <- uploadResult{fbID: realFBID}
+					} else {
+						logger.Error().Msg("Failed to get media ID")
+					}
+				}(m)
+			}
 
-				if realFBID == 0 {
-					logger.Error().Msg("Failed to get media ID")
-					continue
-				}
+			go func() {
+				wg.Wait()
+				close(results)
+			}()
 
+			for r := range results {
 				task := &socket.SendMessageTask{
 					ThreadId:        msg.ThreadKey,
-					AttachmentFBIds: []int64{realFBID},
+					AttachmentFBIds: []int64{r.fbID},
 					Source:          table.MESSENGER_INBOX_IN_THREAD,
 					SendType:        table.MEDIA,
 					SyncGroup:       1,
