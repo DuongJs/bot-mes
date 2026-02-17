@@ -10,6 +10,12 @@
   },
   "modules": {
     "ping": true,
-    "media": true
+    "media": true,
+    "help": true,
+    "uptime": true,
+    "info": true,
+    "say": true,
+    "coinflip": true,
+    "roll": true
   }
 }
