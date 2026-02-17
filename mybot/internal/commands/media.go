@@ -48,7 +48,7 @@ func (c *MediaCommand) Run(ctx *Context) error {
 		go func(idx int, item media.MediaItem) {
 			defer wg.Done()
 
-			data, mime, err := media.DownloadMedia(item.URL)
+			data, mime, err := media.DownloadMedia(context.Background(), item.URL)
 			if err != nil {
 				c.sendMessage(ctx, fmt.Sprintf("Failed to download media #%d: %v", idx+1, err))
 				return
