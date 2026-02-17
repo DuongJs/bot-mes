@@ -162,11 +162,12 @@ func (t *LSTable) NonNilFields() (fields []string) {
 		return
 	}
 	reflectedTable := reflect.ValueOf(t).Elem()
-	for _, field := range reflect.VisibleFields(reflectedTable.Type()) {
-		if reflectedTable.FieldByName(field.Name).IsNil() {
+	tType := reflectedTable.Type()
+	for i := 0; i < reflectedTable.NumField(); i++ {
+		if reflectedTable.Field(i).IsNil() {
 			continue
 		}
-		fields = append(fields, field.Name)
+		fields = append(fields, tType.Field(i).Name)
 	}
 	return
 }
