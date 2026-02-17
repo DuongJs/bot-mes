@@ -76,6 +76,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
+		// Limit request body to 1 MB to prevent memory exhaustion
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		var newCfg config.Config
 		if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)

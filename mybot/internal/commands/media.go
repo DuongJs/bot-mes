@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -27,7 +26,7 @@ func (c *MediaCommand) Run(ctx *Context) error {
 		return fmt.Errorf("invalid url")
 	}
 
-	medias, err := media.GetMedia(context.Background(), url)
+	medias, err := media.GetMedia(ctx.Ctx, url)
 	if err != nil {
 		// Send error message
 		c.sendMessage(ctx, fmt.Sprintf("Error: %v", err))
@@ -48,13 +47,13 @@ func (c *MediaCommand) Run(ctx *Context) error {
 		go func(idx int, item media.MediaItem) {
 			defer wg.Done()
 
-			data, mime, err := media.DownloadMedia(item.URL)
+			data, mime, err := media.DownloadMedia(ctx.Ctx, item.URL)
 			if err != nil {
 				c.sendMessage(ctx, fmt.Sprintf("Failed to download media #%d: %v", idx+1, err))
 				return
 			}
 
-			uploadResp, err := ctx.Client.SendMercuryUploadRequest(context.Background(), ctx.Message.ThreadKey, &messagix.MercuryUploadMedia{
+			uploadResp, err := ctx.Client.SendMercuryUploadRequest(ctx.Ctx, ctx.Message.ThreadKey, &messagix.MercuryUploadMedia{
 				Filename:  "media",
 				MimeType:  mime,
 				MediaData: data,
@@ -88,7 +87,7 @@ func (c *MediaCommand) Run(ctx *Context) error {
 			SyncGroup:       1,
 			Otid:            methods.GenerateEpochID(),
 		}
-		ctx.Client.ExecuteTask(context.Background(), task)
+		ctx.Client.ExecuteTask(ctx.Ctx, task)
 	}
 
 	return nil
@@ -103,7 +102,7 @@ func (c *MediaCommand) sendMessage(ctx *Context, text string) {
 		SyncGroup: 1,
 		Otid:      methods.GenerateEpochID(),
 	}
-	ctx.Client.ExecuteTask(context.Background(), task)
+	ctx.Client.ExecuteTask(ctx.Ctx, task)
 }
 
 func (c *MediaCommand) Description() string {

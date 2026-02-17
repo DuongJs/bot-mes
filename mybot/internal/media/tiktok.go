@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
-	"time"
 )
 
 const (
@@ -38,10 +37,11 @@ type TikTokResponse struct {
 
 func GetTikTokMedia(ctx context.Context, url string) ([]MediaItem, error) {
 	// Resolve short URL
-	shortURLClient := &http.Client{
-		Timeout: 10 * time.Second,
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create tiktok request: %w", err)
 	}
-	resp, err := shortURLClient.Get(url)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve tiktok url: %w", err)
 	}
@@ -60,14 +60,13 @@ func GetTikTokMedia(ctx context.Context, url string) ([]MediaItem, error) {
 
 	// Fetch from API
 	apiURL := fmt.Sprintf("%s?aweme_id=%s", TikTokAPI, awemeID)
-	req, err := http.NewRequestWithContext(ctx, "OPTIONS", apiURL, nil)
+	apiReq, err := http.NewRequestWithContext(ctx, "OPTIONS", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create api request: %w", err)
 	}
-	req.Header.Set("User-Agent", TikTokUA)
+	apiReq.Header.Set("User-Agent", TikTokUA)
 
-	client := &http.Client{Timeout: FetchTimeout}
-	apiResp, err := client.Do(req)
+	apiResp, err := httpClient.Do(apiReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call tiktok api: %w", err)
 	}

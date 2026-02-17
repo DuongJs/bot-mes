@@ -45,13 +45,11 @@ type InstagramResponse struct {
 func GetInstagramMedia(ctx context.Context, inputURL string) ([]MediaItem, error) {
 	// Check for redirects (e.g. share links)
 	if strings.Contains(inputURL, "/share") {
-		client := &http.Client{
-			Timeout: FetchTimeout,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return nil
-			},
+		req, err := http.NewRequestWithContext(ctx, "GET", inputURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create redirect request: %w", err)
 		}
-		resp, err := client.Get(inputURL)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check redirect: %w", err)
 		}
@@ -68,8 +66,7 @@ func GetInstagramMedia(ctx context.Context, inputURL string) ([]MediaItem, error
 	// Get CSRF Token
 	req, _ := http.NewRequestWithContext(ctx, "GET", InstagramURL, nil)
 	req.Header.Set("User-Agent", UserAgent)
-	client := &http.Client{Timeout: FetchTimeout}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch instagram home: %w", err)
 	}
@@ -122,7 +119,7 @@ func GetInstagramMedia(ctx context.Context, inputURL string) ([]MediaItem, error
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", UserAgent)
 
-	resp, err = client.Do(req)
+	resp, err = httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call instagram graphql: %w", err)
 	}

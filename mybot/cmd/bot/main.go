@@ -59,6 +59,16 @@ func main() {
 	cmds.Register("uptime", &commands.UptimeCommand{})
 	cmds.Register("about", &commands.AboutCommand{})
 	cmds.Register("status", &commands.StatusCommand{})
+	cmds.Register("id", &commands.IDCommand{})
+
+	// Periodically clean expired cooldowns to prevent memory buildup
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			cmds.CleanCooldowns()
+		}
+	}()
 
 	// Setup restart channel
 	restartChan := make(chan struct{})
@@ -179,7 +189,7 @@ func handleMessage(msg *commands.WrappedMessage) {
 				wg.Add(1)
 				go func(item media.MediaItem) {
 					defer wg.Done()
-					data, mime, err := media.DownloadMedia(item.URL)
+					data, mime, err := media.DownloadMedia(context.Background(), item.URL)
 					if err != nil {
 						logger.Error().Err(err).Msg("Failed to download media")
 						return
@@ -242,6 +252,7 @@ func handleMessage(msg *commands.WrappedMessage) {
 
 	logger.Info().Str("cmd", cmdName).Msg("Processing command")
 	err := cmds.Execute(cmdName, &commands.Context{
+		Ctx:       context.Background(),
 		Client:    client,
 		Message:   msg,
 		Args:      args,

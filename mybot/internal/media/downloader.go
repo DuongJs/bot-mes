@@ -43,8 +43,12 @@ func GetMedia(ctx context.Context, url string) ([]MediaItem, error) {
 	return nil, fmt.Errorf("unsupported platform")
 }
 
-func DownloadMedia(url string) ([]byte, string, error) {
-	resp, err := httpClient.Get(url)
+func DownloadMedia(ctx context.Context, url string) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create download request: %w", err)
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, "", err
 	}

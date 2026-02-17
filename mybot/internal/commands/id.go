@@ -2,28 +2,20 @@ package commands
 
 import (
 	"fmt"
-	"runtime"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix/methods"
 	"go.mau.fi/mautrix-meta/pkg/messagix/socket"
 	"go.mau.fi/mautrix-meta/pkg/messagix/table"
 )
 
-const BotVersion = "1.0.0"
+type IDCommand struct{}
 
-type AboutCommand struct{}
-
-func (c *AboutCommand) Run(ctx *Context) error {
+func (c *IDCommand) Run(ctx *Context) error {
 	text := fmt.Sprintf(
-		"🤖 Bot Info\n"+
-			"Version: %s\n"+
-			"Go: %s\n"+
-			"OS/Arch: %s/%s\n"+
-			"Commands: ping, help, media, uptime, about, status, id",
-		BotVersion,
-		runtime.Version(),
-		runtime.GOOS,
-		runtime.GOARCH,
+		"🔍 Info\nThread ID: %d\nSender ID: %d\nMessage ID: %s",
+		ctx.Message.ThreadKey,
+		ctx.Message.SenderId,
+		ctx.Message.MessageId,
 	)
 
 	task := &socket.SendMessageTask{
@@ -38,6 +30,6 @@ func (c *AboutCommand) Run(ctx *Context) error {
 	return err
 }
 
-func (c *AboutCommand) Description() string {
-	return "Shows bot information"
+func (c *IDCommand) Description() string {
+	return "Shows thread and sender ID info"
 }

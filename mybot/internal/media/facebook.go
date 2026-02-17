@@ -50,14 +50,7 @@ func GetFacebookVideo(ctx context.Context, url string) (*MediaItem, error) {
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{
-		Timeout: FetchTimeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return nil // Follow redirects
-		},
-	}
-
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch facebook url: %w", err)
 	}
