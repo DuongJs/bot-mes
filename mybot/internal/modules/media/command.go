@@ -24,32 +24,32 @@ func (c *Command) Name() string {
 }
 
 func (c *Command) Description() string {
-	return "Downloads media from Facebook, TikTok, Instagram"
+	return "Tải media từ Facebook, TikTok, Instagram"
 }
 
 func (c *Command) Execute(ctx *core.CommandContext) error {
 	if len(ctx.Args) == 0 {
-		return fmt.Errorf("usage: !media <url>")
+		return fmt.Errorf("cách dùng: !media <đường dẫn>")
 	}
 	url := ctx.Args[0]
 
 	// Validate URL
 	if !strings.HasPrefix(url, "http") {
-		return fmt.Errorf("invalid url")
+		return fmt.Errorf("đường dẫn không hợp lệ")
 	}
 
 	// 1. Get media items
 	medias, err := c.Service.GetMediaItems(ctx.Ctx, url)
 	if err != nil {
-		ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Error: %v", err))
+		ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Lỗi: %v", err))
 		return err
 	}
 	if len(medias) == 0 {
-		ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, "No media found")
+		ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, "Không tìm thấy media")
 		return nil
 	}
 
-	ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Found %d media items, processing...", len(medias)))
+	ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Tìm thấy %d media, đang xử lý...", len(medias)))
 
 	// 2. Download and Send Concurrently
 	var wg sync.WaitGroup
@@ -61,13 +61,13 @@ func (c *Command) Execute(ctx *core.CommandContext) error {
 			// Download
 			data, mime, err := c.Service.Download(ctx.Ctx, item.URL)
 			if err != nil {
-				ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Failed to download #%d: %v", idx+1, err))
+				ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Tải xuống #%d thất bại: %v", idx+1, err))
 				return
 			}
 
 			// Send
 			if err := ctx.Sender.SendMedia(ctx.Ctx, ctx.ThreadID, data, "media", mime); err != nil {
-				ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Failed to send #%d: %v", idx+1, err))
+				ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Gửi #%d thất bại: %v", idx+1, err))
 			}
 		}(i, m)
 	}

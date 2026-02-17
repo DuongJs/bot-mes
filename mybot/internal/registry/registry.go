@@ -57,11 +57,11 @@ func (r *Registry) SetCooldown(senderID int64, command string) {
 func (r *Registry) Execute(name string, ctx *core.CommandContext) error {
 	cmd, ok := r.commands[strings.ToLower(name)]
 	if !ok {
-		return fmt.Errorf("command not found: %s", name)
+		return fmt.Errorf("không tìm thấy lệnh: %s", name)
 	}
 
 	if remaining, inCooldown := r.CheckCooldown(ctx.SenderID, name); inCooldown {
-		return fmt.Errorf("cooldown: please wait %.1fs", remaining.Seconds())
+		return fmt.Errorf("vui lòng chờ %.1f giây", remaining.Seconds())
 	}
 
 	err := cmd.Execute(ctx)

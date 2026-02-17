@@ -11,7 +11,7 @@ func (c *Command) Name() string {
 }
 
 func (c *Command) Description() string {
-	return "Replies with Pong!"
+	return "Trả lời Pong!"
 }
 
 func (c *Command) Execute(ctx *core.CommandContext) error {

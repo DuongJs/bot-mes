@@ -19,10 +19,13 @@ import (
 	"mybot/internal/core"
 	"mybot/internal/dashboard"
 	"mybot/internal/media"
+	"mybot/internal/modules/coinflip"
 	"mybot/internal/modules/help"
 	"mybot/internal/modules/info"
 	mediaMod "mybot/internal/modules/media"
 	"mybot/internal/modules/ping"
+	"mybot/internal/modules/roll"
+	"mybot/internal/modules/say"
 	"mybot/internal/modules/uptime"
 	"mybot/internal/registry"
 	"mybot/internal/transport/facebook"
@@ -88,6 +91,18 @@ func main() {
 		cmds.Register(&info.AboutCommand{})
 		cmds.Register(&info.IDCommand{})
 		cmds.Register(&info.StatusCommand{})
+	}
+
+	if enabled(cfg.Modules, "say") {
+		cmds.Register(&say.Command{})
+	}
+
+	if enabled(cfg.Modules, "coinflip") {
+		cmds.Register(&coinflip.Command{})
+	}
+
+	if enabled(cfg.Modules, "roll") {
+		cmds.Register(&roll.Command{})
 	}
 
 	// Periodically clean expired cooldowns
@@ -255,7 +270,7 @@ func handleMessage(msg *WrappedMessage) {
 	err := cmds.Execute(cmdName, ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("Command execution failed")
-		fbClient.SendMessage(ctx.Ctx, ctx.ThreadID, "Error: "+err.Error())
+		fbClient.SendMessage(ctx.Ctx, ctx.ThreadID, "Lỗi: "+err.Error())
 	}
 }
 
