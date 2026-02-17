@@ -254,7 +254,7 @@ func (c *Client) makeRequestDirect(ctx context.Context, url string, method strin
 	}
 
 	if response.StatusCode >= 500 {
-		return nil, nil, fmt.Errorf("%w: %d", ErrServerError, response.StatusCode)
+		return nil, nil, fmt.Errorf("%w: %d, body: %s", ErrServerError, response.StatusCode, string(responseBody))
 	}
 
 	return response, responseBody, nil
