@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"mybot/internal/media"
 
@@ -38,41 +39,54 @@ func (c *MediaCommand) Run(ctx *Context) error {
 		return nil
 	}
 
-	for _, m := range medias {
-		// Download file
-		data, mime, err := media.DownloadMedia(m.URL)
-		if err != nil {
-			c.sendMessage(ctx, fmt.Sprintf("Failed to download media: %v", err))
-			continue
-		}
+	// Process media items concurrently
+	type uploadResult struct {
+		fbID int64
+		idx  int
+	}
 
-		// Upload to Mercury
-		uploadResp, err := ctx.Client.SendMercuryUploadRequest(context.Background(), ctx.Message.ThreadKey, &messagix.MercuryUploadMedia{
-			Filename:  "media",
-			MimeType:  mime,
-			MediaData: data,
-		})
-		if err != nil {
-			c.sendMessage(ctx, fmt.Sprintf("Failed to upload media: %v", err))
-			continue
-		}
+	var wg sync.WaitGroup
+	results := make(chan uploadResult, len(medias))
 
-		// Get FBID
-		// Wait, messagix types says Metadata is json.RawMessage, but parseMetadata populates RealMetadata
-		// Let's check RealMetadata
-		var realFBID int64
-		if uploadResp.Payload.RealMetadata != nil {
-			realFBID = uploadResp.Payload.RealMetadata.GetFbId()
-		}
+	for i, m := range medias {
+		wg.Add(1)
+		go func(idx int, item media.MediaItem) {
+			defer wg.Done()
 
-		if realFBID == 0 {
-			c.sendMessage(ctx, "Failed to get media ID")
-			continue
-		}
+			data, mime, err := media.DownloadMedia(item.URL)
+			if err != nil {
+				return
+			}
 
+			uploadResp, err := ctx.Client.SendMercuryUploadRequest(context.Background(), ctx.Message.ThreadKey, &messagix.MercuryUploadMedia{
+				Filename:  "media",
+				MimeType:  mime,
+				MediaData: data,
+			})
+			if err != nil {
+				return
+			}
+
+			var realFBID int64
+			if uploadResp.Payload.RealMetadata != nil {
+				realFBID = uploadResp.Payload.RealMetadata.GetFbId()
+			}
+			if realFBID != 0 {
+				results <- uploadResult{fbID: realFBID, idx: idx}
+			}
+		}(i, m)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	for r := range results {
+		_ = r.idx
 		task := &socket.SendMessageTask{
 			ThreadId:        ctx.Message.ThreadKey,
-			AttachmentFBIds: []int64{realFBID},
+			AttachmentFBIds: []int64{r.fbID},
 			Source:          table.MESSENGER_INBOX_IN_THREAD,
 			SendType:        table.MEDIA,
 			SyncGroup:       1,

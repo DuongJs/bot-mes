@@ -4,14 +4,26 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const maxDownloadSize = 50 * 1024 * 1024 // 50 MB
 
 var httpClient = &http.Client{
 	Timeout: FetchTimeout,
+	Transport: &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:        20,
+		MaxIdleConnsPerHost: 5,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  true,
+	},
 }
 
 func GetMedia(ctx context.Context, url string) ([]MediaItem, error) {
