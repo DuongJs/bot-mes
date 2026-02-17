@@ -48,6 +48,8 @@ var (
 	cmds         *registry.Registry
 	startTime    time.Time
 	mediaService *mediaMod.Service
+	selfID       int64
+	seenMessages sync.Map
 )
 
 type WrappedMessage struct {
@@ -105,12 +107,13 @@ func main() {
 		cmds.Register(&roll.Command{})
 	}
 
-	// Periodically clean expired cooldowns
+	// Periodically clean expired cooldowns and seen messages
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
 			cmds.CleanCooldowns()
+			seenMessages.Clear()
 		}
 	}()
 
@@ -185,7 +188,8 @@ func runBot(ctx context.Context) {
 		logger.Error().Err(err).Msg("Failed to load messages page")
 		return
 	}
-	logger.Info().Int64("id", user.GetFBID()).Msg("Logged in")
+	selfID = user.GetFBID()
+	logger.Info().Int64("id", selfID).Msg("Logged in")
 
 	err = client.Connect(ctx)
 	if err != nil {
@@ -232,7 +236,17 @@ func handleMessage(msg *WrappedMessage) {
 		return
 	}
 
-	fbClient := facebook.NewClient(client, 0)
+	// Skip messages sent by the bot itself to prevent infinite loops
+	if selfID != 0 && msg.SenderId == selfID {
+		return
+	}
+
+	// Deduplicate: skip messages we've already processed
+	if _, loaded := seenMessages.LoadOrStore(msg.MessageId, struct{}{}); loaded {
+		return
+	}
+
+	fbClient := facebook.NewClient(client, selfID)
 
 	// Auto-detection logic (reusing MediaService)
 	if mediaService != nil {
