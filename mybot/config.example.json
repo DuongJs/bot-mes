@@ -13,6 +13,9 @@
     "media": true,
     "help": true,
     "uptime": true,
-    "info": true
+    "info": true,
+    "say": true,
+    "coinflip": true,
+    "roll": true
   }
 }

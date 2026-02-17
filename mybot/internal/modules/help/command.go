@@ -27,7 +27,7 @@ func (c *Command) Name() string {
 }
 
 func (c *Command) Description() string {
-	return "Lists available commands"
+	return "Hiển thị danh sách các lệnh"
 }
 
 func (c *Command) Execute(ctx *core.CommandContext) error {
@@ -40,7 +40,7 @@ func (c *Command) Execute(ctx *core.CommandContext) error {
 	sort.Strings(names)
 
 	var b strings.Builder
-	b.WriteString("Available Commands:\n")
+	b.WriteString("📋 Danh sách lệnh:\n")
 	for _, name := range names {
 		desc := list[name]
 		b.WriteString(fmt.Sprintf("- %s: %s\n", name, desc))
