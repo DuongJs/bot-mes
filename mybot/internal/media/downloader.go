@@ -43,6 +43,26 @@ func GetMedia(ctx context.Context, url string) ([]MediaItem, error) {
 	return nil, fmt.Errorf("unsupported platform")
 }
 
+// FilenameFromMIME returns a filename with a proper extension based on the MIME type.
+func FilenameFromMIME(mimeType string) string {
+	switch {
+	case strings.HasPrefix(mimeType, "video/"):
+		return "media.mp4"
+	case strings.Contains(mimeType, "image/gif"):
+		return "media.gif"
+	case strings.Contains(mimeType, "image/png"):
+		return "media.png"
+	case strings.Contains(mimeType, "image/webp"):
+		return "media.webp"
+	case strings.HasPrefix(mimeType, "image/"):
+		return "media.jpg"
+	case strings.HasPrefix(mimeType, "audio/"):
+		return "media.mp3"
+	default:
+		return "media.bin"
+	}
+}
+
 func DownloadMedia(ctx context.Context, url string) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {

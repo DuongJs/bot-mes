@@ -299,7 +299,7 @@ func processMediaAuto(ctx context.Context, sender core.MessageSender, threadID i
 				return
 			}
 
-			if err := sender.SendMedia(ctx, threadID, data, "media", mime); err != nil {
+			if err := sender.SendMedia(ctx, threadID, data, media.FilenameFromMIME(mime), mime); err != nil {
 				logger.Error().Err(err).Msg("Failed to send media")
 			}
 		}(i, m)

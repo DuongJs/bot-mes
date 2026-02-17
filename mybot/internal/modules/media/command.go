@@ -66,7 +66,7 @@ func (c *Command) Execute(ctx *core.CommandContext) error {
 			}
 
 			// Send
-			if err := ctx.Sender.SendMedia(ctx.Ctx, ctx.ThreadID, data, "media", mime); err != nil {
+			if err := ctx.Sender.SendMedia(ctx.Ctx, ctx.ThreadID, data, media.FilenameFromMIME(mime), mime); err != nil {
 				ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Gửi #%d thất bại: %v", idx+1, err))
 			}
 		}(i, m)
