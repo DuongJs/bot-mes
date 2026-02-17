@@ -50,6 +50,7 @@ var (
 	mediaService *mediaMod.Service
 	selfID       int64
 	seenMessages sync.Map
+	msgSem       = make(chan struct{}, 100) // limit concurrent message handlers
 )
 
 type WrappedMessage struct {
@@ -210,20 +211,30 @@ func handleEvent(ctx context.Context, evt any) {
 				Msg("Received table update")
 
 			for _, m := range e.Table.LSUpsertMessage {
-				handleMessage(&WrappedMessage{
+				msg := &WrappedMessage{
 					ThreadKey: m.ThreadKey,
 					Text:      m.Text,
 					SenderId:  m.SenderId,
 					MessageId: m.MessageId,
-				})
+				}
+				msgSem <- struct{}{}
+				go func() {
+					defer func() { <-msgSem }()
+					handleMessage(msg)
+				}()
 			}
 			for _, m := range e.Table.LSInsertMessage {
-				handleMessage(&WrappedMessage{
+				msg := &WrappedMessage{
 					ThreadKey: m.ThreadKey,
 					Text:      m.Text,
 					SenderId:  m.SenderId,
 					MessageId: m.MessageId,
-				})
+				}
+				msgSem <- struct{}{}
+				go func() {
+					defer func() { <-msgSem }()
+					handleMessage(msg)
+				}()
 			}
 		}
 	case *messagix.Event_SocketError:
