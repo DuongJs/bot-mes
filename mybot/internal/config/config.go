@@ -92,14 +92,22 @@ func Load(path string) (*Config, error) {
 	}
 
 	// If cookie_string is provided, parse it and merge into cookies
-	if cfg.CookieString != "" {
-		parsed := ParseCookieString(cfg.CookieString)
-		for k, v := range parsed {
-			cfg.Cookies[k] = v
-		}
-	}
+	cfg.mergeCookieString()
 
 	return &cfg, nil
+}
+
+// mergeCookieString parses CookieString and merges results into Cookies map.
+func (c *Config) mergeCookieString() {
+	if c.CookieString == "" {
+		return
+	}
+	if c.Cookies == nil {
+		c.Cookies = make(map[string]string)
+	}
+	for k, v := range ParseCookieString(c.CookieString) {
+		c.Cookies[k] = v
+	}
 }
 
 func (c *Config) Save(path string) error {
@@ -124,15 +132,5 @@ func (c *Config) Update(newCfg *Config) {
 	c.Port = newCfg.Port
 	c.CookieString = newCfg.CookieString
 	c.Cookies = newCfg.Cookies
-
-	// If cookie_string is provided, parse and merge
-	if c.CookieString != "" {
-		if c.Cookies == nil {
-			c.Cookies = make(map[string]string)
-		}
-		parsed := ParseCookieString(c.CookieString)
-		for k, v := range parsed {
-			c.Cookies[k] = v
-		}
-	}
+	c.mergeCookieString()
 }
