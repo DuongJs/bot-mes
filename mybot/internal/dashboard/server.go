@@ -54,7 +54,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	data, _ := content.ReadFile("index.html")
+	data, err := content.ReadFile("index.html")
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 	w.Write(data)
 }
 
@@ -82,7 +86,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to save config", http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
 	case http.MethodGet:
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(s.Config)
