@@ -13,15 +13,19 @@ import (
 	"github.com/rs/zerolog"
 	"go.mau.fi/mautrix-meta/pkg/messagix"
 	"go.mau.fi/mautrix-meta/pkg/messagix/cookies"
-	"go.mau.fi/mautrix-meta/pkg/messagix/methods"
-	"go.mau.fi/mautrix-meta/pkg/messagix/socket"
-	"go.mau.fi/mautrix-meta/pkg/messagix/table"
 	"go.mau.fi/mautrix-meta/pkg/messagix/types"
 
-	"mybot/internal/commands"
 	"mybot/internal/config"
+	"mybot/internal/core"
 	"mybot/internal/dashboard"
 	"mybot/internal/media"
+	"mybot/internal/modules/help"
+	"mybot/internal/modules/info"
+	mediaMod "mybot/internal/modules/media"
+	"mybot/internal/modules/ping"
+	"mybot/internal/modules/uptime"
+	"mybot/internal/registry"
+	"mybot/internal/transport/facebook"
 )
 
 func initLogger() zerolog.Logger {
@@ -35,12 +39,20 @@ func initLogger() zerolog.Logger {
 var urlRegex = regexp.MustCompile(`https?://\S+`)
 
 var (
-	logger    zerolog.Logger
-	cfg       *config.Config
-	client    *messagix.Client
-	cmds      *commands.Registry
-	startTime time.Time
+	logger       zerolog.Logger
+	cfg          *config.Config
+	client       *messagix.Client
+	cmds         *registry.Registry
+	startTime    time.Time
+	mediaService *mediaMod.Service
 )
+
+type WrappedMessage struct {
+	ThreadKey int64
+	Text      string
+	SenderId  int64
+	MessageId string
+}
 
 func main() {
 	logger = initLogger()
@@ -52,16 +64,33 @@ func main() {
 		logger.Fatal().Err(err).Msg("Failed to load config")
 	}
 
-	cmds = commands.NewRegistry()
-	cmds.Register("ping", &commands.PingCommand{})
-	cmds.Register("help", &commands.HelpCommand{Registry: cmds})
-	cmds.Register("media", &commands.MediaCommand{})
-	cmds.Register("uptime", &commands.UptimeCommand{})
-	cmds.Register("about", &commands.AboutCommand{})
-	cmds.Register("status", &commands.StatusCommand{})
-	cmds.Register("id", &commands.IDCommand{})
+	cmds = registry.New()
 
-	// Periodically clean expired cooldowns to prevent memory buildup
+	// Register Modules
+	if enabled(cfg.Modules, "ping") {
+		cmds.Register(&ping.Command{})
+	}
+
+	if enabled(cfg.Modules, "media") {
+		mediaService = mediaMod.NewService()
+		cmds.Register(mediaMod.NewCommand(mediaService))
+	}
+
+	if enabled(cfg.Modules, "help") {
+		cmds.Register(help.NewCommand(cmds))
+	}
+
+	if enabled(cfg.Modules, "uptime") {
+		cmds.Register(&uptime.Command{})
+	}
+
+	if enabled(cfg.Modules, "info") {
+		cmds.Register(&info.AboutCommand{})
+		cmds.Register(&info.IDCommand{})
+		cmds.Register(&info.StatusCommand{})
+	}
+
+	// Periodically clean expired cooldowns
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
@@ -100,8 +129,24 @@ func main() {
 			if err != nil {
 				logger.Error().Err(err).Msg("Failed to reload config")
 			}
+			// Update modules if needed (re-registering might require clearing old ones or creating new registry)
+			// For simplicity, we just reload config values, but adding/removing modules requires logic.
+			// Currently, we just restart the bot loop, but registry is initialized outside.
+			// Ideally we should re-init registry here too.
 		}
 	}
+}
+
+func enabled(modules map[string]bool, name string) bool {
+	if v, ok := modules[name]; ok {
+		return v
+	}
+	// Default to true if not specified? Or false?
+	// Given config.example.json has them explicitly, let's assume false if missing, or true if map is nil/empty (legacy)
+	if len(modules) == 0 {
+		return true
+	}
+	return false
 }
 
 func runBot(ctx context.Context) {
@@ -145,7 +190,7 @@ func handleEvent(ctx context.Context, evt any) {
 				Msg("Received table update")
 
 			for _, m := range e.Table.LSUpsertMessage {
-				handleMessage(&commands.WrappedMessage{
+				handleMessage(&WrappedMessage{
 					ThreadKey: m.ThreadKey,
 					Text:      m.Text,
 					SenderId:  m.SenderId,
@@ -153,7 +198,7 @@ func handleEvent(ctx context.Context, evt any) {
 				})
 			}
 			for _, m := range e.Table.LSInsertMessage {
-				handleMessage(&commands.WrappedMessage{
+				handleMessage(&WrappedMessage{
 					ThreadKey: m.ThreadKey,
 					Text:      m.Text,
 					SenderId:  m.SenderId,
@@ -166,74 +211,19 @@ func handleEvent(ctx context.Context, evt any) {
 	}
 }
 
-func handleMessage(msg *commands.WrappedMessage) {
+func handleMessage(msg *WrappedMessage) {
 	if msg == nil || msg.Text == "" {
 		return
 	}
 
-	urlMatch := urlRegex.FindString(msg.Text)
+	fbClient := facebook.NewClient(client, 0)
 
-	if urlMatch != "" {
-		// Try to download media
-		medias, err := media.GetMedia(context.Background(), urlMatch)
-		if err == nil && len(medias) > 0 {
-			logger.Info().Str("url", urlMatch).Int("count", len(medias)).Msg("Auto-detected media from URL")
-
-			type uploadResult struct {
-				fbID int64
-			}
-			var wg sync.WaitGroup
-			results := make(chan uploadResult, len(medias))
-
-			for _, m := range medias {
-				wg.Add(1)
-				go func(item media.MediaItem) {
-					defer wg.Done()
-					data, mime, err := media.DownloadMedia(context.Background(), item.URL)
-					if err != nil {
-						logger.Error().Err(err).Msg("Failed to download media")
-						return
-					}
-
-					uploadResp, err := client.SendMercuryUploadRequest(context.Background(), msg.ThreadKey, &messagix.MercuryUploadMedia{
-						Filename:  "media",
-						MimeType:  mime,
-						MediaData: data,
-					})
-					if err != nil {
-						logger.Error().Err(err).Msg("Failed to upload media")
-						return
-					}
-
-					var realFBID int64
-					if uploadResp.Payload.RealMetadata != nil {
-						realFBID = uploadResp.Payload.RealMetadata.GetFbId()
-					}
-					if realFBID != 0 {
-						results <- uploadResult{fbID: realFBID}
-					} else {
-						logger.Error().Msg("Failed to get media ID")
-					}
-				}(m)
-			}
-
-			go func() {
-				wg.Wait()
-				close(results)
-			}()
-
-			for r := range results {
-				task := &socket.SendMessageTask{
-					ThreadId:        msg.ThreadKey,
-					AttachmentFBIds: []int64{r.fbID},
-					Source:          table.MESSENGER_INBOX_IN_THREAD,
-					SendType:        table.MEDIA,
-					SyncGroup:       1,
-					Otid:            methods.GenerateEpochID(),
-				}
-				client.ExecuteTask(context.Background(), task)
-			}
-			return // Stop processing if media was handled
+	// Auto-detection logic (reusing MediaService)
+	if mediaService != nil {
+		urlMatch := urlRegex.FindString(msg.Text)
+		if urlMatch != "" {
+			processMediaAuto(context.Background(), fbClient, msg.ThreadKey, urlMatch)
+			return
 		}
 	}
 
@@ -251,14 +241,52 @@ func handleMessage(msg *commands.WrappedMessage) {
 	args := parts[1:]
 
 	logger.Info().Str("cmd", cmdName).Msg("Processing command")
-	err := cmds.Execute(cmdName, &commands.Context{
+
+	ctx := &core.CommandContext{
 		Ctx:       context.Background(),
-		Client:    client,
-		Message:   msg,
+		Sender:    fbClient,
+		ThreadID:  msg.ThreadKey,
+		SenderID:  msg.SenderId,
 		Args:      args,
+		RawText:   msg.Text,
 		StartTime: startTime,
-	})
+	}
+
+	err := cmds.Execute(cmdName, ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("Command execution failed")
+		fbClient.SendMessage(ctx.Ctx, ctx.ThreadID, "Error: "+err.Error())
 	}
+}
+
+func processMediaAuto(ctx context.Context, sender core.MessageSender, threadID int64, url string) {
+	medias, err := mediaService.GetMediaItems(ctx, url)
+	if err != nil {
+		// Silent fail on auto-detection usually, or log
+		return
+	}
+	if len(medias) == 0 {
+		return
+	}
+
+	logger.Info().Str("url", url).Int("count", len(medias)).Msg("Auto-detected media")
+
+	var wg sync.WaitGroup
+	for i, m := range medias {
+		wg.Add(1)
+		go func(idx int, item media.MediaItem) {
+			defer wg.Done()
+
+			data, mime, err := mediaService.Download(ctx, item.URL)
+			if err != nil {
+				logger.Error().Err(err).Msg("Failed to download media")
+				return
+			}
+
+			if err := sender.SendMedia(ctx, threadID, data, "media", mime); err != nil {
+				logger.Error().Err(err).Msg("Failed to send media")
+			}
+		}(i, m)
+	}
+	wg.Wait()
 }
