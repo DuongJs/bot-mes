@@ -248,3 +248,136 @@ func TestHandleRestart(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }
+
+func TestHandleStatusEnhancedFields(t *testing.T) {
+	s := newTestServer()
+	s.SetConnected(true)
+	s.IncrementMessages()
+	s.IncrementMessages()
+	s.IncrementMessages()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	w := httptest.NewRecorder()
+	s.handleStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["connected"] != true {
+		t.Errorf("expected connected=true, got %v", result["connected"])
+	}
+	if result["message_count"] != float64(3) {
+		t.Errorf("expected message_count=3, got %v", result["message_count"])
+	}
+	if result["command_count"] != float64(2) {
+		t.Errorf("expected command_count=2, got %v", result["command_count"])
+	}
+	if result["active_modules"] != float64(2) {
+		t.Errorf("expected active_modules=2, got %v", result["active_modules"])
+	}
+	if result["prefix"] != "!" {
+		t.Errorf("expected prefix=!, got %v", result["prefix"])
+	}
+}
+
+func TestLogWriter(t *testing.T) {
+	lb := NewLogBuffer(100)
+	w := &LogWriter{Buffer: lb}
+
+	// Write a JSON log line (as zerolog would produce)
+	_, err := w.Write([]byte(`{"level":"error","message":"something failed","time":"2025-01-01T00:00:00Z"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entries := lb.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].Level != "error" {
+		t.Errorf("expected level=error, got %s", entries[0].Level)
+	}
+	if entries[0].Message != "something failed" {
+		t.Errorf("expected message='something failed', got %s", entries[0].Message)
+	}
+}
+
+func TestLogWriterNonJSON(t *testing.T) {
+	lb := NewLogBuffer(100)
+	w := &LogWriter{Buffer: lb}
+
+	_, err := w.Write([]byte("plain text log line"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entries := lb.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].Level != "info" {
+		t.Errorf("expected level=info for non-JSON, got %s", entries[0].Level)
+	}
+}
+
+func TestSetConnectedAndIncrementMessages(t *testing.T) {
+	s := newTestServer()
+
+	if s.connected.Load() {
+		t.Error("expected connected=false initially")
+	}
+	if s.messageCount.Load() != 0 {
+		t.Error("expected messageCount=0 initially")
+	}
+
+	s.SetConnected(true)
+	if !s.connected.Load() {
+		t.Error("expected connected=true after SetConnected(true)")
+	}
+
+	s.IncrementMessages()
+	s.IncrementMessages()
+	if s.messageCount.Load() != 2 {
+		t.Errorf("expected messageCount=2, got %d", s.messageCount.Load())
+	}
+
+	s.SetConnected(false)
+	if s.connected.Load() {
+		t.Error("expected connected=false after SetConnected(false)")
+	}
+}
+
+func TestHandleConfigPost(t *testing.T) {
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpDir := t.TempDir()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	s := newTestServer()
+	body := `{"command_prefix":"#","port":"9090","cookies":{}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handleConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var result map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["status"] != "ok" {
+		t.Errorf("expected status=ok, got %s", result["status"])
+	}
+	if s.Config.CommandPrefix != "#" {
+		t.Errorf("expected prefix=#, got %s", s.Config.CommandPrefix)
+	}
+}

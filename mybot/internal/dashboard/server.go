@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"mybot/internal/config"
@@ -28,6 +29,10 @@ type Server struct {
 	Restart   func()
 	Commands  CommandLister
 	Logs      *LogBuffer
+
+	// Live stats updated by the bot.
+	connected    atomic.Bool
+	messageCount atomic.Int64
 }
 
 // New creates a new dashboard server.
@@ -39,6 +44,12 @@ func New(cfg *config.Config, restartFunc func()) *Server {
 		Logs:      NewLogBuffer(500),
 	}
 }
+
+// SetConnected updates the bot connection status shown on the dashboard.
+func (s *Server) SetConnected(v bool) { s.connected.Store(v) }
+
+// IncrementMessages increments the processed message counter.
+func (s *Server) IncrementMessages() { s.messageCount.Add(1) }
 
 // Start starts the dashboard HTTP server on the given port.
 func (s *Server) Start(port string) {
@@ -84,9 +95,27 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	activeModules := 0
+	for _, v := range s.Config.Modules {
+		if v {
+			activeModules++
+		}
+	}
+
+	cmdCount := 0
+	if s.Commands != nil {
+		cmdCount = len(s.Commands.List())
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"uptime": time.Since(s.StartTime).String(),
+		"uptime":         time.Since(s.StartTime).String(),
+		"connected":      s.connected.Load(),
+		"message_count":  s.messageCount.Load(),
+		"command_count":  cmdCount,
+		"active_modules": activeModules,
+		"prefix":         s.Config.CommandPrefix,
 	})
 }
 
@@ -104,6 +133,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to save config", http.StatusInternalServerError)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	case http.MethodGet:
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(s.Config)

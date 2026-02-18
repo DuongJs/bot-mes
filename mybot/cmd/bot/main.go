@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/signal"
 	"regexp"
@@ -31,11 +32,14 @@ import (
 	"mybot/internal/transport/facebook"
 )
 
-func initLogger() zerolog.Logger {
+func initLogger(logWriter *dashboard.LogWriter) zerolog.Logger {
 	if os.Getenv("LOG_FORMAT") == "json" {
-		return zerolog.New(os.Stdout).With().Timestamp().Logger()
+		w := io.MultiWriter(os.Stdout, logWriter)
+		return zerolog.New(w).With().Timestamp().Logger()
 	}
-	w := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: "15:04:05"}
+	consoleW := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: "15:04:05"}
+	// Console writer for terminal; JSON writer for the dashboard buffer.
+	w := io.MultiWriter(consoleW, logWriter)
 	return zerolog.New(w).With().Timestamp().Logger()
 }
 
@@ -51,6 +55,7 @@ var (
 	selfID       int64
 	seenMessages sync.Map
 	msgSem       = make(chan struct{}, 100) // limit concurrent message handlers
+	dash         *dashboard.Server
 )
 
 type WrappedMessage struct {
@@ -61,14 +66,26 @@ type WrappedMessage struct {
 }
 
 func main() {
-	logger = initLogger()
 	startTime = time.Now()
 
-	var err error
-	cfg, err = config.Load("config.json")
+	// Setup restart channel
+	restartChan := make(chan struct{})
+
+	// Create dashboard early so logger can write to its log buffer.
+	cfgInit, err := config.Load("config.json")
 	if err != nil {
-		logger.Fatal().Err(err).Msg("Failed to load config")
+		// Fallback: use a basic logger to report the error.
+		basic := zerolog.New(os.Stdout).With().Timestamp().Logger()
+		basic.Fatal().Err(err).Msg("Failed to load config")
 	}
+	cfg = cfgInit
+
+	dash = dashboard.New(cfg, func() {
+		logger.Info().Msg("Restart triggered from dashboard")
+		restartChan <- struct{}{}
+	})
+	logWriter := &dashboard.LogWriter{Buffer: dash.Logs}
+	logger = initLogger(logWriter)
 
 	cmds = registry.New()
 
@@ -118,14 +135,7 @@ func main() {
 		}
 	}()
 
-	// Setup restart channel
-	restartChan := make(chan struct{})
-
 	// Start dashboard
-	dash := dashboard.New(cfg, func() {
-		logger.Info().Msg("Restart triggered from dashboard")
-		restartChan <- struct{}{}
-	})
 	dash.Commands = cmds
 	dash.Start(cfg.Port)
 
@@ -192,12 +202,15 @@ func runBot(ctx context.Context) {
 	selfID = user.GetFBID()
 	logger.Info().Int64("id", selfID).Msg("Logged in")
 
+	dash.SetConnected(true)
+
 	err = client.Connect(ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to connect")
 	}
 
 	<-ctx.Done()
+	dash.SetConnected(false)
 	client.Disconnect()
 }
 
@@ -256,6 +269,8 @@ func handleMessage(msg *WrappedMessage) {
 	if _, loaded := seenMessages.LoadOrStore(msg.MessageId, struct{}{}); loaded {
 		return
 	}
+
+	dash.IncrementMessages()
 
 	fbClient := facebook.NewClient(client, selfID)
 

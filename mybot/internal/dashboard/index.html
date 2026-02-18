@@ -193,6 +193,13 @@ tr:last-child td{border-bottom:none}
         </div>
       </div>
       <div class="card stat-card">
+        <div class="stat-icon">💬</div>
+        <div class="stat-info">
+          <div class="stat-value" id="msgCount">0</div>
+          <div class="stat-label">Tin nhắn đã xử lý</div>
+        </div>
+      </div>
+      <div class="card stat-card">
         <div class="stat-icon">⚡</div>
         <div class="stat-info">
           <div class="stat-value" id="cmdCount">0</div>
@@ -204,6 +211,13 @@ tr:last-child td{border-bottom:none}
         <div class="stat-info">
           <div class="stat-value" id="moduleCount">0</div>
           <div class="stat-label">Module đang bật</div>
+        </div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-icon">🔤</div>
+        <div class="stat-info">
+          <div class="stat-value" id="prefixValue">!</div>
+          <div class="stat-label">Tiền tố lệnh</div>
         </div>
       </div>
     </div>
@@ -351,12 +365,23 @@ async function api(url,opts){
 const statusDot=document.getElementById("statusDot");
 const statusText=document.getElementById("statusText");
 const uptimeEl=document.getElementById("uptimeValue");
+const msgCountEl=document.getElementById("msgCount");
+const prefixEl=document.getElementById("prefixValue");
 async function loadStatus(){
   try{
     const d=await api("/api/status");
     uptimeEl.textContent=d.uptime;
-    statusDot.className="status-dot online";
-    statusText.textContent="Đang chạy";
+    if(d.connected){
+      statusDot.className="status-dot online";
+      statusText.textContent="Đang chạy";
+    }else{
+      statusDot.className="status-dot offline";
+      statusText.textContent="Chưa kết nối";
+    }
+    msgCountEl.textContent=d.message_count||0;
+    cmdCountEl.textContent=d.command_count||0;
+    moduleCountEl.textContent=d.active_modules||0;
+    if(d.prefix)prefixEl.textContent=d.prefix;
   }catch{
     statusDot.className="status-dot offline";
     statusText.textContent="Ngoại tuyến";
@@ -371,7 +396,6 @@ async function loadCommands(){
   try{
     const d=await api("/api/commands");
     const entries=Object.entries(d);
-    cmdCountEl.textContent=entries.length;
     if(!entries.length){cmdBody.innerHTML='<tr><td colspan="2" style="text-align:center;color:var(--text-secondary)">Chưa có lệnh nào</td></tr>';return}
     cmdBody.innerHTML=entries.map(([k,v])=>`<tr><td><code style="background:var(--badge-bg);color:var(--badge-text);padding:2px 8px;border-radius:4px;font-size:.85rem">${esc(k)}</code></td><td>${esc(v)}</td></tr>`).join("");
   }catch{cmdBody.innerHTML='<tr><td colspan="2" style="text-align:center;color:var(--danger)">Lỗi tải lệnh</td></tr>'}
@@ -390,7 +414,6 @@ async function loadModules(){
 }
 function renderModules(){
   const entries=Object.entries(moduleState);
-  moduleCountEl.textContent=entries.filter(([,v])=>v).length;
   if(!entries.length){moduleGrid.innerHTML='<div style="color:var(--text-secondary)">Chưa có module nào</div>';return}
   moduleGrid.innerHTML=entries.map(([k,v])=>`
     <div class="module-card">
@@ -398,7 +421,7 @@ function renderModules(){
       <label class="toggle"><input type="checkbox" data-mod="${esc(k)}" ${v?"checked":""}><span class="toggle-slider"></span></label>
     </div>`).join("");
   moduleGrid.querySelectorAll("input[type=checkbox]").forEach(cb=>{
-    cb.addEventListener("change",()=>{moduleState[cb.dataset.mod]=cb.checked;moduleCountEl.textContent=Object.values(moduleState).filter(Boolean).length});
+    cb.addEventListener("change",()=>{moduleState[cb.dataset.mod]=cb.checked});
   });
 }
 document.getElementById("saveModulesBtn").addEventListener("click",async()=>{
