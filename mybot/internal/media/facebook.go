@@ -52,8 +52,8 @@ func GetFacebookVideo(ctx context.Context, url string) (*MediaItem, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve share url: %w", err)
 		}
+		defer resolveResp.Body.Close()
 		url = resolveResp.Request.URL.String()
-		resolveResp.Body.Close()
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
