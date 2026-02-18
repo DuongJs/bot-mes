@@ -41,6 +41,21 @@ var (
 )
 
 func GetFacebookVideo(ctx context.Context, url string) (*MediaItem, error) {
+	// Resolve share links (e.g. /share/v/, /share/p/, /share/r/) to their final URL
+	if strings.Contains(url, "/share/") {
+		resolveReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create redirect request: %w", err)
+		}
+		resolveReq.Header.Set("User-Agent", UserAgent)
+		resolveResp, err := httpClient.Do(resolveReq)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve share url: %w", err)
+		}
+		url = resolveResp.Request.URL.String()
+		resolveResp.Body.Close()
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
