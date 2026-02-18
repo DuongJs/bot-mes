@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -56,13 +57,16 @@ var (
 	seenMessages sync.Map
 	msgSem       = make(chan struct{}, 100) // limit concurrent message handlers
 	dash         *dashboard.Server
+	botReady     atomic.Bool
+	connectTime  atomic.Int64 // unix milliseconds when bot connected
 )
 
 type WrappedMessage struct {
-	ThreadKey int64
-	Text      string
-	SenderId  int64
-	MessageId string
+	ThreadKey   int64
+	Text        string
+	SenderId    int64
+	MessageId   string
+	TimestampMs int64
 }
 
 func main() {
@@ -180,6 +184,8 @@ func enabled(modules map[string]bool, name string) bool {
 }
 
 func runBot(ctx context.Context) {
+	botReady.Store(false)
+
 	c := cookies.NewCookies()
 	c.Platform = types.Facebook
 	for k, v := range cfg.Cookies {
@@ -216,7 +222,18 @@ func runBot(ctx context.Context) {
 
 func handleEvent(ctx context.Context, evt any) {
 	switch e := evt.(type) {
+	case *messagix.Event_Ready:
+		connectTime.Store(time.Now().UnixMilli())
+		botReady.Store(true)
+		logger.Info().Msg("Bot is ready to process messages")
+	case *messagix.Event_Reconnected:
+		connectTime.Store(time.Now().UnixMilli())
+		botReady.Store(true)
+		logger.Info().Msg("Bot reconnected, ready to process messages")
 	case *messagix.Event_PublishResponse:
+		if !botReady.Load() {
+			return
+		}
 		if e.Table != nil {
 			logger.Info().
 				Int("upsert_message_count", len(e.Table.LSUpsertMessage)).
@@ -225,10 +242,11 @@ func handleEvent(ctx context.Context, evt any) {
 
 			for _, m := range e.Table.LSUpsertMessage {
 				msg := &WrappedMessage{
-					ThreadKey: m.ThreadKey,
-					Text:      m.Text,
-					SenderId:  m.SenderId,
-					MessageId: m.MessageId,
+					ThreadKey:   m.ThreadKey,
+					Text:        m.Text,
+					SenderId:    m.SenderId,
+					MessageId:   m.MessageId,
+					TimestampMs: m.TimestampMs,
 				}
 				msgSem <- struct{}{}
 				go func() {
@@ -238,10 +256,11 @@ func handleEvent(ctx context.Context, evt any) {
 			}
 			for _, m := range e.Table.LSInsertMessage {
 				msg := &WrappedMessage{
-					ThreadKey: m.ThreadKey,
-					Text:      m.Text,
-					SenderId:  m.SenderId,
-					MessageId: m.MessageId,
+					ThreadKey:   m.ThreadKey,
+					Text:        m.Text,
+					SenderId:    m.SenderId,
+					MessageId:   m.MessageId,
+					TimestampMs: m.TimestampMs,
 				}
 				msgSem <- struct{}{}
 				go func() {
@@ -262,6 +281,11 @@ func handleMessage(msg *WrappedMessage) {
 
 	// Skip messages sent by the bot itself to prevent infinite loops
 	if selfID != 0 && msg.SenderId == selfID {
+		return
+	}
+
+	// Skip messages older than when the bot connected
+	if msg.TimestampMs > 0 && msg.TimestampMs < connectTime.Load() {
 		return
 	}
 
