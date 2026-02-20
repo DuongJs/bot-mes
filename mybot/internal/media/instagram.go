@@ -17,6 +17,7 @@ const (
 	InstagramURL = "https://www.instagram.com/"
 	GraphqlURL   = "https://www.instagram.com/graphql/query"
 	DocID        = "9510064595728286"
+	IGAppID      = "936619743392459"
 
 	defaultRetries = 5
 	defaultDelay   = 1 * time.Second
@@ -199,8 +200,12 @@ func instagramGraphQLRequest(ctx context.Context, shortcode, csrfToken string, r
 		return nil, fmt.Errorf("failed to create graphql request: %w", err)
 	}
 	req.Header.Set("X-CSRFToken", csrfToken)
+	req.Header.Set("X-IG-App-ID", IGAppID)
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("Referer", InstagramURL)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", UserAgent)
+	req.AddCookie(&http.Cookie{Name: "csrftoken", Value: csrfToken})
 
 	resp, err := httpClient.Do(req)
 	if err != nil {

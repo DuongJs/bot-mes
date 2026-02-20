@@ -343,7 +343,7 @@ func handleMessage(msg *WrappedMessage) {
 func processMediaAuto(ctx context.Context, sender core.MessageSender, threadID int64, url string) {
 	medias, err := mediaService.GetMediaItems(ctx, url)
 	if err != nil {
-		// Silent fail on auto-detection usually, or log
+		logger.Warn().Err(err).Str("url", url).Msg("Auto-detect media failed")
 		return
 	}
 	if len(medias) == 0 {
