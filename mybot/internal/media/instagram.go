@@ -229,7 +229,8 @@ func instagramGraphQLRequest(ctx context.Context, shortcode, csrfToken string, r
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		// On 401, re-fetch CSRF token before retrying
+		// On 401, re-fetch CSRF token before retrying.
+		// If refresh fails, retry with the existing token anyway.
 		if resp.StatusCode == http.StatusUnauthorized {
 			if newToken, err := getCSRFToken(ctx); err == nil {
 				csrfToken = newToken
