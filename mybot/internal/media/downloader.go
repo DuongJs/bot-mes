@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -26,22 +27,63 @@ var httpClient = &http.Client{
 	},
 }
 
-func GetMedia(ctx context.Context, url string) ([]MediaItem, error) {
-	if strings.Contains(url, "instagram.com") {
-		return GetInstagramMedia(ctx, url)
+// PlatformHandler defines a media platform with host-based matching and a handler function.
+type PlatformHandler struct {
+	Name    string
+	Hosts   []string
+	Handler func(ctx context.Context, url string) ([]MediaItem, error)
+}
+
+// platforms is the ordered registry of supported media platforms.
+var platforms = []PlatformHandler{
+	{
+		Name:    "instagram",
+		Hosts:   []string{"instagram.com", "instagr.am"},
+		Handler: GetInstagramMedia,
+	},
+	{
+		Name:  "tiktok",
+		Hosts: []string{"tiktok.com"},
+		Handler: GetTikTokMedia,
+	},
+	{
+		Name:    "douyin",
+		Hosts:   []string{"douyin.com", "iesdouyin.com"},
+		Handler: GetDouyinMedia,
+	},
+	{
+		Name:  "facebook",
+		Hosts: []string{"facebook.com", "fb.watch"},
+		Handler: func(ctx context.Context, u string) ([]MediaItem, error) {
+			item, err := GetFacebookVideo(ctx, u)
+			if err != nil {
+				return nil, err
+			}
+			return []MediaItem{*item}, nil
+		},
+	},
+}
+
+// MatchHost checks whether a raw URL's hostname matches any of the given host suffixes.
+func MatchHost(rawURL string, hosts []string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
 	}
-	if strings.Contains(url, "tiktok.com") {
-		return GetTikTokMedia(ctx, url)
-	}
-	if strings.Contains(url, "douyin.com") || strings.Contains(url, "iesdouyin.com") {
-		return GetDouyinMedia(ctx, url)
-	}
-	if strings.Contains(url, "facebook.com") || strings.Contains(url, "fb.watch") {
-		item, err := GetFacebookVideo(ctx, url)
-		if err != nil {
-			return nil, err
+	hostname := strings.ToLower(u.Hostname())
+	for _, h := range hosts {
+		if hostname == h || strings.HasSuffix(hostname, "."+h) {
+			return true
 		}
-		return []MediaItem{*item}, nil
+	}
+	return false
+}
+
+func GetMedia(ctx context.Context, rawURL string) ([]MediaItem, error) {
+	for _, p := range platforms {
+		if MatchHost(rawURL, p.Hosts) {
+			return p.Handler(ctx, rawURL)
+		}
 	}
 	return nil, fmt.Errorf("unsupported platform")
 }

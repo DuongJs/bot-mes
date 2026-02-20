@@ -1,7 +1,6 @@
 package media
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -56,28 +55,90 @@ func TestExtractAwemeID(t *testing.T) {
 	}
 }
 
-func TestGetMediaPlatformDetection(t *testing.T) {
+func TestMatchHost(t *testing.T) {
 	tests := []struct {
-		name     string
-		url      string
-		contains string
+		name  string
+		url   string
+		hosts []string
+		want  bool
 	}{
-		{"tiktok.com", "https://www.tiktok.com/@user/video/123", "tiktok.com"},
-		{"vm.tiktok.com", "https://vm.tiktok.com/xxx", "tiktok.com"},
-		{"vt.tiktok.com", "https://vt.tiktok.com/xxx", "tiktok.com"},
-		{"douyin.com", "https://www.douyin.com/video/123", "douyin.com"},
-		{"v.douyin.com", "https://v.douyin.com/xxx", "douyin.com"},
-		{"iesdouyin.com", "https://www.iesdouyin.com/share/video/123", "iesdouyin.com"},
-		{"facebook.com share video", "https://www.facebook.com/share/v/1DXMCN1e1T/", "facebook.com"},
-		{"facebook.com share post", "https://www.facebook.com/share/p/abc123/", "facebook.com"},
-		{"facebook.com share reel", "https://www.facebook.com/share/r/xyz789/", "facebook.com"},
-		{"facebook.com reel", "https://www.facebook.com/reel/123456", "facebook.com"},
-		{"fb.watch", "https://fb.watch/abc123/", "fb.watch"},
+		// Instagram
+		{"instagram.com", "https://www.instagram.com/p/ABC123/", []string{"instagram.com"}, true},
+		{"instagram.com bare", "https://instagram.com/p/ABC123/", []string{"instagram.com"}, true},
+		{"instagr.am", "https://instagr.am/p/ABC123/", []string{"instagr.am"}, true},
+		{"instagram with igsh", "https://www.instagram.com/p/DUZ-cBBkwzt/?igsh=MWMxcTl4bXM0ZmUyNQ==", []string{"instagram.com"}, true},
+		// TikTok
+		{"tiktok.com", "https://www.tiktok.com/@user/video/123", []string{"tiktok.com"}, true},
+		{"vm.tiktok.com", "https://vm.tiktok.com/xxx", []string{"tiktok.com"}, true},
+		{"vt.tiktok.com", "https://vt.tiktok.com/xxx", []string{"tiktok.com"}, true},
+		// Douyin
+		{"douyin.com", "https://www.douyin.com/video/123", []string{"douyin.com", "iesdouyin.com"}, true},
+		{"v.douyin.com", "https://v.douyin.com/xxx", []string{"douyin.com"}, true},
+		{"iesdouyin.com", "https://www.iesdouyin.com/share/video/123", []string{"iesdouyin.com"}, true},
+		// Facebook
+		{"facebook.com share video", "https://www.facebook.com/share/v/1DXMCN1e1T/", []string{"facebook.com", "fb.watch"}, true},
+		{"facebook.com reel", "https://www.facebook.com/reel/123456", []string{"facebook.com"}, true},
+		{"fb.watch", "https://fb.watch/abc123/", []string{"fb.watch"}, true},
+		// Negative
+		{"not instagram in query", "https://example.com/?url=instagram.com", []string{"instagram.com"}, false},
+		{"empty url", "", []string{"instagram.com"}, false},
+		{"unrelated domain", "https://example.com/page", []string{"instagram.com"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if !strings.Contains(tt.url, tt.contains) {
-				t.Errorf("URL %q should contain platform domain %s", tt.url, tt.contains)
+			got := MatchHost(tt.url, tt.hosts)
+			if got != tt.want {
+				t.Errorf("MatchHost(%q, %v) = %v, want %v", tt.url, tt.hosts, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractShortcode(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"standard post", "https://www.instagram.com/p/DUZ-cBBkwzt/", "DUZ-cBBkwzt"},
+		{"post with igsh param", "https://www.instagram.com/p/DUZ-cBBkwzt/?igsh=MWMxcTl4bXM0ZmUyNQ==", "DUZ-cBBkwzt"},
+		{"reel", "https://www.instagram.com/reel/ABC123/", "ABC123"},
+		{"tv", "https://www.instagram.com/tv/XYZ789/", "XYZ789"},
+		{"reels", "https://www.instagram.com/reels/DEF456/", "DEF456"},
+		{"share post", "https://www.instagram.com/share/p/ABC123/", "ABC123"},
+		{"share reel", "https://www.instagram.com/share/reel/ABC123/", "ABC123"},
+		{"no shortcode", "https://www.instagram.com/username/", ""},
+		{"empty", "", ""},
+		{"shortcode with special chars", "https://www.instagram.com/p/A-B_c123/", "A-B_c123"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractShortcode(tt.url)
+			if got != tt.want {
+				t.Errorf("extractShortcode(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsShareURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{"instagram share post", "https://www.instagram.com/share/p/ABC123/", true},
+		{"instagram share reel", "https://www.instagram.com/share/reel/ABC123/", true},
+		{"standard post", "https://www.instagram.com/p/ABC123/", false},
+		{"post with igsh", "https://www.instagram.com/p/DUZ-cBBkwzt/?igsh=MWMxcTl4bXM0ZmUyNQ==", false},
+		{"standard reel", "https://www.instagram.com/reel/ABC123/", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isShareURL(tt.url)
+			if got != tt.want {
+				t.Errorf("isShareURL(%q) = %v, want %v", tt.url, got, tt.want)
 			}
 		})
 	}
@@ -98,7 +159,7 @@ func TestFacebookShareLinkDetection(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := strings.Contains(tt.url, "/share/")
+			got := isShareURL(tt.url)
 			if got != tt.isShare {
 				t.Errorf("URL %q: isShare = %v, want %v", tt.url, got, tt.isShare)
 			}
