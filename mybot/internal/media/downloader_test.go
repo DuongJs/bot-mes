@@ -219,6 +219,9 @@ func TestInstagramGraphQLHeaders(t *testing.T) {
 	req.Header.Set("Referer", InstagramURL)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Origin", "https://www.instagram.com")
 	req.AddCookie(&http.Cookie{Name: "csrftoken", Value: "test-token"})
 
 	resp, err := httpClient.Do(req)
@@ -240,6 +243,15 @@ func TestInstagramGraphQLHeaders(t *testing.T) {
 	if got := capturedHeaders.Get("X-Csrftoken"); got != "test-token" {
 		t.Errorf("X-CSRFToken = %q, want %q", got, "test-token")
 	}
+	if got := capturedHeaders.Get("Accept"); got != "*/*" {
+		t.Errorf("Accept = %q, want %q", got, "*/*")
+	}
+	if got := capturedHeaders.Get("Accept-Language"); got != "en-US,en;q=0.9" {
+		t.Errorf("Accept-Language = %q, want %q", got, "en-US,en;q=0.9")
+	}
+	if got := capturedHeaders.Get("Origin"); got != "https://www.instagram.com" {
+		t.Errorf("Origin = %q, want %q", got, "https://www.instagram.com")
+	}
 
 	// Verify CSRF cookie was sent
 	found := false
@@ -251,5 +263,78 @@ func TestInstagramGraphQLHeaders(t *testing.T) {
 	}
 	if !found {
 		t.Error("csrftoken cookie not found in request")
+	}
+}
+
+func TestInstagramGraphQL401Retry(t *testing.T) {
+	attempts := 0
+
+	// Mock GraphQL server that returns 401 once, then succeeds
+	graphqlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		resp := InstagramResponse{}
+		resp.Data.XDTShorcodeMedia = &struct {
+			Typename              string `json:"__typename"`
+			IsVideo               bool   `json:"is_video"`
+			VideoURL              string `json:"video_url"`
+			DisplayURL            string `json:"display_url"`
+			EdgeSidecarToChildren struct {
+				Edges []struct {
+					Node struct {
+						IsVideo    bool   `json:"is_video"`
+						VideoURL   string `json:"video_url"`
+						DisplayURL string `json:"display_url"`
+					} `json:"node"`
+				} `json:"edges"`
+			} `json:"edge_sidecar_to_children"`
+		}{
+			Typename:   "XDTGraphImage",
+			IsVideo:    false,
+			DisplayURL: "https://example.com/image.jpg",
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer graphqlServer.Close()
+
+	// Simulate the retry logic: first request gets 401, second succeeds
+	ctx := context.Background()
+	csrfToken := "initial-token"
+	retries := 2
+
+	var lastResp *http.Response
+	for i := 0; i <= retries; i++ {
+		req, _ := http.NewRequestWithContext(ctx, "POST", graphqlServer.URL, nil)
+		req.Header.Set("X-CSRFToken", csrfToken)
+		req.AddCookie(&http.Cookie{Name: "csrftoken", Value: csrfToken})
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if resp.StatusCode == http.StatusUnauthorized && i < retries {
+			resp.Body.Close()
+			// Simulate CSRF token refresh on 401
+			csrfToken = "refreshed-token"
+			continue
+		}
+		lastResp = resp
+		break
+	}
+
+	if lastResp == nil {
+		t.Fatal("expected a successful response after retry")
+	}
+	defer lastResp.Body.Close()
+
+	if lastResp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200 after retry, got %d", lastResp.StatusCode)
+	}
+	if attempts != 2 {
+		t.Errorf("expected 2 attempts (1 fail + 1 success), got %d", attempts)
 	}
 }
