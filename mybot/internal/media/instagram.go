@@ -205,6 +205,9 @@ func instagramGraphQLRequest(ctx context.Context, shortcode, csrfToken string, r
 	req.Header.Set("Referer", InstagramURL)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Origin", "https://www.instagram.com")
 	req.AddCookie(&http.Cookie{Name: "csrftoken", Value: csrfToken})
 
 	resp, err := httpClient.Do(req)
@@ -213,8 +216,8 @@ func instagramGraphQLRequest(ctx context.Context, shortcode, csrfToken string, r
 	}
 	defer resp.Body.Close()
 
-	// Retry on 429 (rate limit) and 403 (forbidden) with exponential backoff
-	if (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden) && retries > 0 {
+	// Retry on 429 (rate limit), 403 (forbidden), and 401 (unauthorized) with exponential backoff
+	if (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized) && retries > 0 {
 		wait := delay
 		if ra := resp.Header.Get("Retry-After"); ra != "" {
 			if secs, err := strconv.Atoi(ra); err == nil {
@@ -225,6 +228,12 @@ func instagramGraphQLRequest(ctx context.Context, shortcode, csrfToken string, r
 		case <-time.After(wait):
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		}
+		// On 401, re-fetch CSRF token before retrying
+		if resp.StatusCode == http.StatusUnauthorized {
+			if newToken, err := getCSRFToken(ctx); err == nil {
+				csrfToken = newToken
+			}
 		}
 		return instagramGraphQLRequest(ctx, shortcode, csrfToken, retries-1, delay*2)
 	}
