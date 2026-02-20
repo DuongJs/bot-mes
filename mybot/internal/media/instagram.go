@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -146,7 +147,10 @@ func GetInstagramMedia(ctx context.Context, inputURL string) ([]MediaItem, error
 }
 
 func getCSRFToken(ctx context.Context) (string, error) {
-	req, _ := http.NewRequestWithContext(ctx, "GET", InstagramURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", InstagramURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create csrf request: %w", err)
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -181,7 +185,10 @@ func instagramGraphQLRequest(ctx context.Context, shortcode, csrfToken string, r
 		"hoisted_comment_id":      nil,
 		"hoisted_reply_id":        nil,
 	}
-	jsonVars, _ := json.Marshal(variables)
+	jsonVars, err := json.Marshal(variables)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal variables: %w", err)
+	}
 
 	form := url.Values{}
 	form.Set("variables", string(jsonVars))
@@ -205,8 +212,8 @@ func instagramGraphQLRequest(ctx context.Context, shortcode, csrfToken string, r
 	if (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden) && retries > 0 {
 		wait := delay
 		if ra := resp.Header.Get("Retry-After"); ra != "" {
-			if secs, err := time.ParseDuration(ra + "s"); err == nil {
-				wait = secs
+			if secs, err := strconv.Atoi(ra); err == nil {
+				wait = time.Duration(secs) * time.Second
 			}
 		}
 		select {
