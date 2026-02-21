@@ -21,6 +21,9 @@ func (m *mockSender) SendMessage(_ context.Context, _ int64, text string) error 
 func (m *mockSender) SendMedia(_ context.Context, _ int64, _ []byte, _, _ string) error {
 	return nil
 }
+func (m *mockSender) SendMultiMedia(_ context.Context, _ int64, _ []core.MediaAttachment) error {
+	return nil
+}
 func (m *mockSender) GetSelfID() int64 { return 0 }
 
 func TestStatusCommandOutput(t *testing.T) {

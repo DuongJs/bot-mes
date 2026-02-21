@@ -9,7 +9,15 @@ import (
 type MessageSender interface {
 	SendMessage(ctx context.Context, threadID int64, text string) error
 	SendMedia(ctx context.Context, threadID int64, data []byte, filename, mimeType string) error
+	SendMultiMedia(ctx context.Context, threadID int64, items []MediaAttachment) error
 	GetSelfID() int64
+}
+
+// MediaAttachment represents a single media file to be uploaded and sent.
+type MediaAttachment struct {
+	Data     []byte
+	Filename string
+	MimeType string
 }
 
 // CommandContext provides context for command execution.

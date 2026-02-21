@@ -352,22 +352,53 @@ func processMediaAuto(ctx context.Context, sender core.MessageSender, threadID i
 
 	logger.Info().Str("url", url).Int("count", len(medias)).Msg("Auto-detected media")
 
-	var wg sync.WaitGroup
-	for i, m := range medias {
-		wg.Add(1)
-		go func(idx int, item media.MediaItem) {
-			defer wg.Done()
+	// Download all items in parallel
+	type downloadResult struct {
+		index    int
+		data     []byte
+		mime     string
+		filename string
+		err      error
+	}
 
+	results := make(chan downloadResult, len(medias))
+	for i, m := range medias {
+		go func(idx int, item media.MediaItem) {
 			data, mime, err := mediaService.Download(ctx, item.URL)
 			if err != nil {
-				logger.Error().Err(err).Msg("Failed to download media")
+				results <- downloadResult{index: idx, err: err}
 				return
 			}
-
-			if err := sender.SendMedia(ctx, threadID, data, media.FilenameFromMIME(mime), mime); err != nil {
-				logger.Error().Err(err).Msg("Failed to send media")
+			results <- downloadResult{
+				index:    idx,
+				data:     data,
+				mime:     mime,
+				filename: media.FilenameFromMIME(mime),
 			}
 		}(i, m)
 	}
-	wg.Wait()
+
+	// Collect all downloads
+	attachments := make([]core.MediaAttachment, 0, len(medias))
+	for range medias {
+		r := <-results
+		if r.err != nil {
+			logger.Error().Err(r.err).Int("index", r.index).Msg("Failed to download media")
+			continue
+		}
+		attachments = append(attachments, core.MediaAttachment{
+			Data:     r.data,
+			Filename: r.filename,
+			MimeType: r.mime,
+		})
+	}
+
+	if len(attachments) == 0 {
+		return
+	}
+
+	// Send all as one message
+	if err := sender.SendMultiMedia(ctx, threadID, attachments); err != nil {
+		logger.Error().Err(err).Msg("Failed to send media")
+	}
 }
