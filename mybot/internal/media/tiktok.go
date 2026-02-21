@@ -69,8 +69,21 @@ func GetTikTokMedia(ctx context.Context, url string) ([]MediaItem, error) {
 		return nil, fmt.Errorf("no aweme_id found in %s", finalURL)
 	}
 
-	// Fetch from API using OPTIONS method (required by TikTok's API)
+	// Fetch from API with retry (10 attempts, no delay)
 	apiURL := fmt.Sprintf("%s?aweme_id=%s", TikTokAPI, awemeID)
+	var lastErr error
+	for i := 0; i < 10; i++ {
+		items, err := doTikTokAPIRequest(ctx, apiURL)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return items, nil
+	}
+	return nil, fmt.Errorf("tiktok api failed after 10 retries: %w", lastErr)
+}
+
+func doTikTokAPIRequest(ctx context.Context, apiURL string) ([]MediaItem, error) {
 	apiReq, err := http.NewRequestWithContext(ctx, "OPTIONS", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create api request: %w", err)

@@ -56,6 +56,20 @@ func GetFacebookVideo(ctx context.Context, url string) (*MediaItem, error) {
 		url = resolveResp.Request.URL.String()
 	}
 
+	// Retry up to 10 times with no delay
+	var lastErr error
+	for i := 0; i < 10; i++ {
+		item, err := doFacebookVideoRequest(ctx, url)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return item, nil
+	}
+	return nil, fmt.Errorf("facebook video failed after 10 retries: %w", lastErr)
+}
+
+func doFacebookVideoRequest(ctx context.Context, url string) (*MediaItem, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -86,13 +100,7 @@ func GetFacebookVideo(ctx context.Context, url string) (*MediaItem, error) {
 	data = strings.ReplaceAll(data, "&quot;", "\"")
 	data = strings.ReplaceAll(data, "&amp;", "&")
 
-	// Helper to extract JSON string value if needed, though simple regex match might be already unescaped enough or need unescaping
-	// The JS used JSON.parse(`{"text":"${s}"}`).text to handle escapes.
-	// We can use a simple unquote if it's quoted, or just rely on regex capture if it's clean.
-	// Facebook URLs usually have \/ escaped slashes.
-
 	parseStr := func(s string) string {
-		// Basic unescape of unicode sequence if present, but mainly unescape slashes
 		return strings.ReplaceAll(s, `\/`, `/`)
 	}
 

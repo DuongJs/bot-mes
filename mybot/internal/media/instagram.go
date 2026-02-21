@@ -7,25 +7,16 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
-	"strconv"
 	"strings"
-	"time"
 )
 
 const (
-	InstagramURL = "https://www.instagram.com/"
-	GraphqlURL   = "https://www.instagram.com/graphql/query"
-	DocID        = "9510064595728286"
-	IGAppID      = "936619743392459"
+	igGraphqlURL = "https://www.instagram.com/api/graphql"
+	igDocID      = "10015901848480474"
+	igAppID      = "936619743392459"
+	igLSD        = "AdTG3HXj-AuAqL1v6Ppe6xBXk0s"
 
-	defaultRetries = 5
-	defaultDelay   = 1 * time.Second
-)
-
-var (
-	csrfTokenRegex = regexp.MustCompile(`csrftoken=([^;]+)`)
-	shortcodeRegex = regexp.MustCompile(`/(p|reel|tv|reels)/([^/?#]+)`)
+	igDefaultRetries = 10
 )
 
 type InstagramResponse struct {
@@ -97,22 +88,11 @@ func GetInstagramMedia(ctx context.Context, inputURL string) ([]MediaItem, error
 
 	shortcode := extractShortcode(inputURL)
 	if shortcode == "" {
-		// Fallback to regex for non-standard URLs
-		match := shortcodeRegex.FindStringSubmatch(inputURL)
-		if len(match) < 3 {
-			return nil, fmt.Errorf("invalid instagram url")
-		}
-		shortcode = match[2]
-	}
-
-	// Get CSRF Token
-	csrfToken, err := getCSRFToken(ctx)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid instagram url")
 	}
 
 	// Query GraphQL with retry
-	data, err := instagramGraphQLRequest(ctx, shortcode, csrfToken, defaultRetries, defaultDelay)
+	data, err := igGraphQLRequest(ctx, shortcode, igDefaultRetries)
 	if err != nil {
 		return nil, err
 	}
@@ -147,44 +127,21 @@ func GetInstagramMedia(ctx context.Context, inputURL string) ([]MediaItem, error
 	return items, nil
 }
 
-func getCSRFToken(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", InstagramURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create csrf request: %w", err)
-	}
-	req.Header.Set("User-Agent", UserAgent)
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch instagram home: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("instagram home returned status: %d", resp.StatusCode)
-	}
-
-	// Check Set-Cookie header first
-	for _, cookie := range resp.Cookies() {
-		if cookie.Name == "csrftoken" {
-			return cookie.Value, nil
-		}
-	}
-
-	// Fallback to body regex
-	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, MaxHTMLBytes))
-	if match := csrfTokenRegex.FindStringSubmatch(string(bodyBytes)); len(match) > 1 {
-		return match[1], nil
-	}
-
-	return "", fmt.Errorf("csrf token not found")
-}
-
-func instagramGraphQLRequest(ctx context.Context, shortcode, csrfToken string, retries int, delay time.Duration) (*InstagramResponse, error) {
+// igGraphQLRequest calls Instagram's public GraphQL API with hardcoded headers.
+// No CSRF token fetch needed — uses static lsd + app-id approach.
+func igGraphQLRequest(ctx context.Context, shortcode string, retries int) (*InstagramResponse, error) {
 	variables := map[string]interface{}{
-		"shortcode":               shortcode,
-		"fetch_tagged_user_count": nil,
-		"hoisted_comment_id":      nil,
-		"hoisted_reply_id":        nil,
+		"shortcode":                         shortcode,
+		"fetch_comment_count":               0,
+		"fetch_related_profile_media_count": 0,
+		"parent_comment_count":              0,
+		"child_comment_count":               0,
+		"fetch_like_count":                  0,
+		"fetch_tagged_user_count":           nil,
+		"fetch_preview_comment_count":       0,
+		"has_threaded_comments":             true,
+		"hoisted_comment_id":                nil,
+		"hoisted_reply_id":                  nil,
 	}
 	jsonVars, err := json.Marshal(variables)
 	if err != nil {
@@ -192,59 +149,73 @@ func instagramGraphQLRequest(ctx context.Context, shortcode, csrfToken string, r
 	}
 
 	form := url.Values{}
+	form.Set("lsd", igLSD)
+	form.Set("jazoest", "2957")
+	form.Set("fb_api_caller_class", "RelayModern")
+	form.Set("fb_api_req_friendly_name", "PolarisPostActionLoadPostQueryQuery")
+	form.Set("server_timestamps", "true")
+	form.Set("doc_id", igDocID)
 	form.Set("variables", string(jsonVars))
-	form.Set("doc_id", DocID)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", GraphqlURL, strings.NewReader(form.Encode()))
+	var lastErr error
+	for attempt := 0; attempt <= retries; attempt++ {
+		result, err := doIGRequest(ctx, form)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return result, nil
+	}
+	return nil, fmt.Errorf("instagram graphql failed after %d retries: %w", retries, lastErr)
+}
+
+func doIGRequest(ctx context.Context, form url.Values) (*InstagramResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", igGraphqlURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create graphql request: %w", err)
 	}
-	req.Header.Set("X-CSRFToken", csrfToken)
-	req.Header.Set("X-IG-App-ID", IGAppID)
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("Referer", InstagramURL)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", UserAgent)
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("Origin", "https://www.instagram.com")
-	req.AddCookie(&http.Cookie{Name: "csrftoken", Value: csrfToken})
+
+	req.Header.Set("authority", "www.instagram.com")
+	req.Header.Set("accept", "*/*")
+	req.Header.Set("accept-language", "vi-VN,vi;q=0.9,en-US;q=0.6,en;q=0.5")
+	req.Header.Set("content-type", "application/x-www-form-urlencoded")
+	req.Header.Set("dpr", "2.625")
+	req.Header.Set("origin", "https://www.instagram.com")
+	req.Header.Set("referer", "https://www.instagram.com/")
+	req.Header.Set("sec-ch-prefers-color-scheme", "dark")
+	req.Header.Set("sec-ch-ua", `"Chromium";v="107", "Not=A?Brand";v="24"`)
+	req.Header.Set("sec-ch-ua-full-version-list", `"Chromium";v="107.0.5304.74", "Not=A?Brand";v="24.0.0.0"`)
+	req.Header.Set("sec-ch-ua-mobile", "?1")
+	req.Header.Set("sec-ch-ua-model", `"SM-A336E"`)
+	req.Header.Set("sec-ch-ua-platform", `"Android"`)
+	req.Header.Set("sec-ch-ua-platform-version", `"13.0.0"`)
+	req.Header.Set("sec-fetch-dest", "empty")
+	req.Header.Set("sec-fetch-mode", "cors")
+	req.Header.Set("sec-fetch-site", "same-origin")
+	req.Header.Set("user-agent", "Mozilla/5.0 (Linux; Android 13; SM-A336E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36")
+	req.Header.Set("x-asbd-id", "129477")
+	req.Header.Set("x-csrftoken", "qPAu6oXeZT5gjItJk4yFAB")
+	req.Header.Set("x-fb-friendly-name", "PolarisPostActionLoadPostQueryQuery")
+	req.Header.Set("x-fb-lsd", igLSD)
+	req.Header.Set("x-ig-app-id", igAppID)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call instagram graphql: %w", err)
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Retry on 429 (rate limit), 403 (forbidden), and 401 (unauthorized) with exponential backoff
-	if (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized) && retries > 0 {
-		wait := delay
-		if ra := resp.Header.Get("Retry-After"); ra != "" {
-			if secs, err := strconv.Atoi(ra); err == nil {
-				wait = time.Duration(secs) * time.Second
-			}
-		}
-		select {
-		case <-time.After(wait):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-		// On 401, re-fetch CSRF token before retrying.
-		// If refresh fails, retry with the existing token anyway.
-		if resp.StatusCode == http.StatusUnauthorized {
-			if newToken, err := getCSRFToken(ctx); err == nil {
-				csrfToken = newToken
-			}
-		}
-		return instagramGraphQLRequest(ctx, shortcode, csrfToken, retries-1, delay*2)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxHTMLBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("instagram graphql returned status: %d", resp.StatusCode)
+		return nil, fmt.Errorf("instagram graphql returned status %d: %s", resp.StatusCode, string(body[:min(len(body), 200)]))
 	}
 
 	var data InstagramResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	if err := json.Unmarshal(body, &data); err != nil {
 		return nil, fmt.Errorf("failed to decode instagram response: %w", err)
 	}
 

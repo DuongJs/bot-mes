@@ -175,12 +175,10 @@ func TestFacebookShareLinkDetection(t *testing.T) {
 
 func TestInstagramGraphQLHeaders(t *testing.T) {
 	var capturedHeaders http.Header
-	var capturedCookies []*http.Cookie
 
 	// Mock GraphQL server
 	graphqlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedHeaders = r.Header.Clone()
-		capturedCookies = r.Cookies()
 
 		resp := InstagramResponse{}
 		resp.Data.XDTShorcodeMedia = &struct {
@@ -206,23 +204,17 @@ func TestInstagramGraphQLHeaders(t *testing.T) {
 	}))
 	defer graphqlServer.Close()
 
-	// Call the function directly with the mock URL - we need to verify headers
-	// Since instagramGraphQLRequest uses hardcoded GraphqlURL, we verify by
-	// checking the request construction logic
 	ctx := context.Background()
 
-	// Build the same request that instagramGraphQLRequest builds
+	// Build request with the same headers as doIGRequest
 	req, _ := http.NewRequestWithContext(ctx, "POST", graphqlServer.URL, nil)
-	req.Header.Set("X-CSRFToken", "test-token")
-	req.Header.Set("X-IG-App-ID", IGAppID)
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("Referer", InstagramURL)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", UserAgent)
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("Origin", "https://www.instagram.com")
-	req.AddCookie(&http.Cookie{Name: "csrftoken", Value: "test-token"})
+	req.Header.Set("x-ig-app-id", igAppID)
+	req.Header.Set("x-fb-lsd", igLSD)
+	req.Header.Set("x-fb-friendly-name", "PolarisPostActionLoadPostQueryQuery")
+	req.Header.Set("content-type", "application/x-www-form-urlencoded")
+	req.Header.Set("origin", "https://www.instagram.com")
+	req.Header.Set("referer", "https://www.instagram.com/")
+	req.Header.Set("accept", "*/*")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -231,49 +223,28 @@ func TestInstagramGraphQLHeaders(t *testing.T) {
 	resp.Body.Close()
 
 	// Verify required headers were sent
-	if got := capturedHeaders.Get("X-Ig-App-Id"); got != IGAppID {
-		t.Errorf("X-IG-App-ID = %q, want %q", got, IGAppID)
+	if got := capturedHeaders.Get("X-Ig-App-Id"); got != igAppID {
+		t.Errorf("X-IG-App-ID = %q, want %q", got, igAppID)
 	}
-	if got := capturedHeaders.Get("X-Requested-With"); got != "XMLHttpRequest" {
-		t.Errorf("X-Requested-With = %q, want %q", got, "XMLHttpRequest")
-	}
-	if got := capturedHeaders.Get("Referer"); got != InstagramURL {
-		t.Errorf("Referer = %q, want %q", got, InstagramURL)
-	}
-	if got := capturedHeaders.Get("X-Csrftoken"); got != "test-token" {
-		t.Errorf("X-CSRFToken = %q, want %q", got, "test-token")
-	}
-	if got := capturedHeaders.Get("Accept"); got != "*/*" {
-		t.Errorf("Accept = %q, want %q", got, "*/*")
-	}
-	if got := capturedHeaders.Get("Accept-Language"); got != "en-US,en;q=0.9" {
-		t.Errorf("Accept-Language = %q, want %q", got, "en-US,en;q=0.9")
+	if got := capturedHeaders.Get("X-Fb-Lsd"); got != igLSD {
+		t.Errorf("X-FB-LSD = %q, want %q", got, igLSD)
 	}
 	if got := capturedHeaders.Get("Origin"); got != "https://www.instagram.com" {
 		t.Errorf("Origin = %q, want %q", got, "https://www.instagram.com")
 	}
-
-	// Verify CSRF cookie was sent
-	found := false
-	for _, c := range capturedCookies {
-		if c.Name == "csrftoken" && c.Value == "test-token" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("csrftoken cookie not found in request")
+	if got := capturedHeaders.Get("Accept"); got != "*/*" {
+		t.Errorf("Accept = %q, want %q", got, "*/*")
 	}
 }
 
-func TestInstagramGraphQL401Retry(t *testing.T) {
+func TestInstagramGraphQLRetry(t *testing.T) {
 	attempts := 0
 
-	// Mock GraphQL server that returns 401 once, then succeeds
+	// Mock server: fail once with 500, then succeed
 	graphqlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
 		if attempts == 1 {
-			w.WriteHeader(http.StatusUnauthorized)
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		resp := InstagramResponse{}
@@ -300,26 +271,20 @@ func TestInstagramGraphQL401Retry(t *testing.T) {
 	}))
 	defer graphqlServer.Close()
 
-	// Simulate the retry logic: first request gets 401, second succeeds
+	// Simulate retry: first request fails, second succeeds
 	ctx := context.Background()
-	csrfToken := "initial-token"
 	retries := 2
 
 	var lastResp *http.Response
 	for i := 0; i <= retries; i++ {
 		req, _ := http.NewRequestWithContext(ctx, "POST", graphqlServer.URL, nil)
-		req.Header.Set("X-CSRFToken", csrfToken)
-		req.AddCookie(&http.Cookie{Name: "csrftoken", Value: csrfToken})
-
 		resp, err := httpClient.Do(req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if resp.StatusCode == http.StatusUnauthorized && i < retries {
+		if resp.StatusCode != http.StatusOK && i < retries {
 			resp.Body.Close()
-			// Simulate CSRF token refresh on 401
-			csrfToken = "refreshed-token"
 			continue
 		}
 		lastResp = resp

@@ -27,17 +27,25 @@ func NewClient(client *messagix.Client, selfID int64) *Client {
 	}
 }
 
+const maxRetries = 10
+
 func (c *Client) SendMessage(ctx context.Context, threadID int64, text string) error {
-	task := &socket.SendMessageTask{
-		ThreadId:  threadID,
-		Text:      text,
-		Source:    table.MESSENGER_INBOX_IN_THREAD,
-		SendType:  table.TEXT,
-		SyncGroup: 1,
-		Otid:      methods.GenerateEpochID(),
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		task := &socket.SendMessageTask{
+			ThreadId:  threadID,
+			Text:      text,
+			Source:    table.MESSENGER_INBOX_IN_THREAD,
+			SendType:  table.TEXT,
+			SyncGroup: 1,
+			Otid:      methods.GenerateEpochID(),
+		}
+		_, lastErr = c.client.ExecuteTask(ctx, task)
+		if lastErr == nil {
+			return nil
+		}
 	}
-	_, err := c.client.ExecuteTask(ctx, task)
-	return err
+	return lastErr
 }
 
 const maxUploadSize = 25 * 1000 * 1000 // 25 MB – Facebook's Mercury upload limit
@@ -46,33 +54,44 @@ func (c *Client) SendMedia(ctx context.Context, threadID int64, data []byte, fil
 	if len(data) > maxUploadSize {
 		return fmt.Errorf("file too large (%d bytes, max %d)", len(data), maxUploadSize)
 	}
-	uploadResp, err := c.client.SendMercuryUploadRequest(ctx, threadID, &messagix.MercuryUploadMedia{
-		Filename:  filename,
-		MimeType:  mimeType,
-		MediaData: data,
-	})
-	if err != nil {
-		return fmt.Errorf("upload failed: %w", err)
-	}
 
-	var realFBID int64
-	if uploadResp.Payload.RealMetadata != nil {
-		realFBID = uploadResp.Payload.RealMetadata.GetFbId()
-	}
-	if realFBID == 0 {
-		return fmt.Errorf("failed to get media ID from upload response")
-	}
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		uploadResp, err := c.client.SendMercuryUploadRequest(ctx, threadID, &messagix.MercuryUploadMedia{
+			Filename:  filename,
+			MimeType:  mimeType,
+			MediaData: data,
+		})
+		if err != nil {
+			lastErr = fmt.Errorf("upload failed: %w", err)
+			continue
+		}
 
-	task := &socket.SendMessageTask{
-		ThreadId:        threadID,
-		AttachmentFBIds: []int64{realFBID},
-		Source:          table.MESSENGER_INBOX_IN_THREAD,
-		SendType:        table.MEDIA,
-		SyncGroup:       1,
-		Otid:            methods.GenerateEpochID(),
+		var realFBID int64
+		if uploadResp.Payload.RealMetadata != nil {
+			realFBID = uploadResp.Payload.RealMetadata.GetFbId()
+		}
+		if realFBID == 0 {
+			lastErr = fmt.Errorf("failed to get media ID from upload response")
+			continue
+		}
+
+		task := &socket.SendMessageTask{
+			ThreadId:        threadID,
+			AttachmentFBIds: []int64{realFBID},
+			Source:          table.MESSENGER_INBOX_IN_THREAD,
+			SendType:        table.MEDIA,
+			SyncGroup:       1,
+			Otid:            methods.GenerateEpochID(),
+		}
+		_, err = c.client.ExecuteTask(ctx, task)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
 	}
-	_, err = c.client.ExecuteTask(ctx, task)
-	return err
+	return lastErr
 }
 
 func (c *Client) GetSelfID() int64 {
