@@ -41,7 +41,7 @@ var (
 	hdSrcRegex         = regexp.MustCompile(`hd_src\s*:\s*"([^"]*)"`)
 
 	// Image URL patterns (for post fallback)
-	ogImageRegex  = regexp.MustCompile(`<meta\s+property="og:image"\s+content="([^"]+)"`)
+	ogImageRegex  = regexp.MustCompile(`<meta[^>]*property="og:image"[^>]*content="([^"]+)"`)
 	imageURIRegex = regexp.MustCompile(`"image":\{"uri":"([^"]+)"`)
 )
 
