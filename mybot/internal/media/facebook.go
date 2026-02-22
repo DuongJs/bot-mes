@@ -30,6 +30,7 @@ var (
 		"accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
 	}
 
+	// Video URL patterns
 	sdURLRegex       = regexp.MustCompile(`"browser_native_sd_url":"(.*?)"`)
 	playableURLRegex = regexp.MustCompile(`"playable_url":"(.*?)"`)
 	sdSrcRegex       = regexp.MustCompile(`sd_src\s*:\s*"([^"]*)"`)
@@ -38,9 +39,16 @@ var (
 	hdURLRegex         = regexp.MustCompile(`"browser_native_hd_url":"(.*?)"`)
 	playableHDURLRegex = regexp.MustCompile(`"playable_url_quality_hd":"(.*?)"`)
 	hdSrcRegex         = regexp.MustCompile(`hd_src\s*:\s*"([^"]*)"`)
+
+	// Image URL patterns (for post fallback)
+	ogImageRegex  = regexp.MustCompile(`<meta[^>]*property="og:image"[^>]*content="([^"]+)"`)
+	imageURIRegex = regexp.MustCompile(`"image":\{"uri":"([^"]+)"`)
 )
 
-func GetFacebookVideo(ctx context.Context, url string) (*MediaItem, error) {
+// GetFacebookMedia tries to extract video from a Facebook URL. If no video is
+// found it falls back to extracting post images so that regular photo-posts and
+// shared links are also supported.
+func GetFacebookMedia(ctx context.Context, url string) ([]MediaItem, error) {
 	// Resolve share links (e.g. /share/v/, /share/p/, /share/r/) to their final URL
 	if strings.Contains(url, "/share/") {
 		resolveReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -59,17 +67,17 @@ func GetFacebookVideo(ctx context.Context, url string) (*MediaItem, error) {
 	// Retry up to 10 times with no delay
 	var lastErr error
 	for i := 0; i < 10; i++ {
-		item, err := doFacebookVideoRequest(ctx, url)
+		items, err := doFacebookMediaRequest(ctx, url)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		return item, nil
+		return items, nil
 	}
-	return nil, fmt.Errorf("facebook video failed after 10 retries: %w", lastErr)
+	return nil, fmt.Errorf("facebook media failed after 10 retries: %w", lastErr)
 }
 
-func doFacebookVideoRequest(ctx context.Context, url string) (*MediaItem, error) {
+func doFacebookMediaRequest(ctx context.Context, url string) ([]MediaItem, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -104,6 +112,7 @@ func doFacebookVideoRequest(ctx context.Context, url string) (*MediaItem, error)
 		return strings.ReplaceAll(s, `\/`, `/`)
 	}
 
+	// Try to extract video URLs first
 	var sdURL string
 	if match := sdURLRegex.FindStringSubmatch(data); len(match) > 1 {
 		sdURL = match[1]
@@ -124,17 +133,41 @@ func doFacebookVideoRequest(ctx context.Context, url string) (*MediaItem, error)
 		hdURL = match[1]
 	}
 
-	if sdURL == "" && hdURL == "" {
-		return nil, fmt.Errorf("no video url found")
+	if sdURL != "" || hdURL != "" {
+		finalURL := sdURL
+		if hdURL != "" {
+			finalURL = hdURL
+		}
+		return []MediaItem{{
+			Type: Video,
+			URL:  parseStr(finalURL),
+		}}, nil
 	}
 
-	finalURL := sdURL
-	if hdURL != "" {
-		finalURL = hdURL
+	// Fallback: try to extract post images
+	return extractFacebookPostImages(data, parseStr)
+}
+
+// extractFacebookPostImages extracts image URLs from Facebook post HTML.
+func extractFacebookPostImages(data string, parseStr func(string) string) ([]MediaItem, error) {
+	seen := make(map[string]bool)
+	var items []MediaItem
+
+	for _, re := range []*regexp.Regexp{imageURIRegex, ogImageRegex} {
+		for _, match := range re.FindAllStringSubmatch(data, -1) {
+			if len(match) > 1 {
+				imgURL := parseStr(match[1])
+				if !seen[imgURL] {
+					seen[imgURL] = true
+					items = append(items, MediaItem{Type: Image, URL: imgURL})
+				}
+			}
+		}
 	}
 
-	return &MediaItem{
-		Type: Video,
-		URL:  parseStr(finalURL),
-	}, nil
+	if len(items) == 0 {
+		return nil, fmt.Errorf("no media found in facebook post")
+	}
+
+	return items, nil
 }

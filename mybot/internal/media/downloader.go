@@ -52,15 +52,9 @@ var platforms = []PlatformHandler{
 		Handler: GetDouyinMedia,
 	},
 	{
-		Name:  "facebook",
-		Hosts: []string{"facebook.com", "fb.watch"},
-		Handler: func(ctx context.Context, u string) ([]MediaItem, error) {
-			item, err := GetFacebookVideo(ctx, u)
-			if err != nil {
-				return nil, err
-			}
-			return []MediaItem{*item}, nil
-		},
+		Name:    "facebook",
+		Hosts:   []string{"facebook.com", "fb.watch"},
+		Handler: GetFacebookMedia,
 	},
 }
 

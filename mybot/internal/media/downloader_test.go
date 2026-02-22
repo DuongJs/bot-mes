@@ -303,3 +303,132 @@ func TestInstagramGraphQLRetry(t *testing.T) {
 		t.Errorf("expected 2 attempts (1 fail + 1 success), got %d", attempts)
 	}
 }
+
+func TestFacebookMediaVideoExtraction(t *testing.T) {
+	// Mock server returning HTML with video URLs
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		html := `<html><body>"browser_native_hd_url":"https:\/\/example.com\/hd_video.mp4""browser_native_sd_url":"https:\/\/example.com\/sd_video.mp4"</body></html>`
+		w.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	items, err := doFacebookMediaRequest(ctx, server.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].Type != Video {
+		t.Errorf("expected Video type, got %s", items[0].Type)
+	}
+	if items[0].URL != "https://example.com/hd_video.mp4" {
+		t.Errorf("expected HD URL, got %s", items[0].URL)
+	}
+}
+
+func TestFacebookMediaPostImageFallback(t *testing.T) {
+	// Mock server returning HTML with no video, only post images
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		html := `<html><head>
+<meta property="og:image" content="https://example.com/post_image.jpg" />
+</head><body>"image":{"uri":"https:\/\/example.com\/photo1.jpg"}"image":{"uri":"https:\/\/example.com\/photo2.jpg"}</body></html>`
+		w.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	items, err := doFacebookMediaRequest(ctx, server.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 image items, got %d", len(items))
+	}
+	for _, item := range items {
+		if item.Type != Image {
+			t.Errorf("expected Image type, got %s", item.Type)
+		}
+	}
+}
+
+func TestFacebookMediaPostImageDedup(t *testing.T) {
+	// Mock server returning HTML with duplicate image URLs
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		html := `<html><head>
+<meta property="og:image" content="https://example.com/same.jpg" />
+</head><body>"image":{"uri":"https:\/\/example.com\/same.jpg"}</body></html>`
+		w.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	items, err := doFacebookMediaRequest(ctx, server.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 deduplicated item, got %d", len(items))
+	}
+	if items[0].URL != "https://example.com/same.jpg" {
+		t.Errorf("unexpected URL: %s", items[0].URL)
+	}
+}
+
+func TestFacebookMediaNoContent(t *testing.T) {
+	// Mock server returning HTML with no video or image content
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		html := `<html><head><title>Facebook</title></head><body>No media here</body></html>`
+		w.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	_, err := doFacebookMediaRequest(ctx, server.URL)
+	if err == nil {
+		t.Fatal("expected error when no media found, got nil")
+	}
+}
+
+func TestFacebookMediaVideoPrefersHD(t *testing.T) {
+	// Mock server returning both SD and HD video URLs
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		html := `<html><body>"browser_native_sd_url":"https://example.com/sd.mp4""browser_native_hd_url":"https://example.com/hd.mp4"</body></html>`
+		w.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	items, err := doFacebookMediaRequest(ctx, server.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].URL != "https://example.com/hd.mp4" {
+		t.Errorf("expected HD URL, got %s", items[0].URL)
+	}
+}
+
+func TestFacebookMediaEscapedImageURIs(t *testing.T) {
+	// Mock server returning escaped image URIs (common in Facebook HTML)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		html := `<html><body>&quot;image&quot;:{&quot;uri&quot;:&quot;https:\/\/example.com\/escaped_photo.jpg&quot;}</body></html>`
+		w.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	items, err := doFacebookMediaRequest(ctx, server.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].URL != "https://example.com/escaped_photo.jpg" {
+		t.Errorf("unexpected URL: %s", items[0].URL)
+	}
+}
