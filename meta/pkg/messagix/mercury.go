@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/textproto"
@@ -68,7 +67,7 @@ func (c *Client) SendMercuryUploadRequest(ctx context.Context, threadID int64, m
 		resp, err := c.parseMercuryResponse(ctx, respBody)
 		if err == nil {
 			return resp, nil
-		} else if attempts > MaxHTTPRetries || errors.Is(err, types.ErrPleaseReloadPage) {
+		} else if attempts > MaxHTTPRetries {
 			return nil, err
 		}
 		c.Logger.Err(err).
