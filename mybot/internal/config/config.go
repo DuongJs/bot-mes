@@ -11,7 +11,6 @@ type Config struct {
 	mu sync.RWMutex
 
 	CommandPrefix string `json:"command_prefix"`
-	Port          string `json:"port"`
 
 	// Raw cookie string: "c_user=...;xs=...;fr=...;datr=...|ACCESS_TOKEN"
 	CookieString string `json:"cookie_string,omitempty"`
@@ -26,7 +25,6 @@ type Config struct {
 func New() *Config {
 	return &Config{
 		CommandPrefix: "!",
-		Port:          "8080",
 		Cookies:       make(map[string]string),
 		Modules:       make(map[string]bool),
 	}
@@ -91,9 +89,6 @@ func Load(path string) (*Config, error) {
 	if cfg.CommandPrefix == "" {
 		cfg.CommandPrefix = "!"
 	}
-	if cfg.Port == "" {
-		cfg.Port = "8080"
-	}
 
 	// If cookie_string is provided, parse it and merge into cookies
 	cfg.mergeCookieString()
@@ -133,7 +128,6 @@ func (c *Config) Update(newCfg *Config) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.CommandPrefix = newCfg.CommandPrefix
-	c.Port = newCfg.Port
 	c.CookieString = newCfg.CookieString
 	c.Cookies = newCfg.Cookies
 	c.Modules = newCfg.Modules

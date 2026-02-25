@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"io"
 	"os"
 	"os/signal"
 	"regexp"
@@ -19,7 +18,6 @@ import (
 
 	"mybot/internal/config"
 	"mybot/internal/core"
-	"mybot/internal/dashboard"
 	"mybot/internal/media"
 	"mybot/internal/modules/coinflip"
 	"mybot/internal/modules/help"
@@ -33,15 +31,12 @@ import (
 	"mybot/internal/transport/facebook"
 )
 
-func initLogger(logWriter *dashboard.LogWriter) zerolog.Logger {
+func initLogger() zerolog.Logger {
 	if os.Getenv("LOG_FORMAT") == "json" {
-		w := io.MultiWriter(os.Stdout, logWriter)
-		return zerolog.New(w).With().Timestamp().Logger()
+		return zerolog.New(os.Stdout).With().Timestamp().Logger()
 	}
 	consoleW := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: "15:04:05"}
-	// Console writer for terminal; JSON writer for the dashboard buffer.
-	w := io.MultiWriter(consoleW, logWriter)
-	return zerolog.New(w).With().Timestamp().Logger()
+	return zerolog.New(consoleW).With().Timestamp().Logger()
 }
 
 var urlRegex = regexp.MustCompile(`https?://\S+`)
@@ -56,7 +51,6 @@ var (
 	selfID       int64
 	seenMessages sync.Map
 	msgSem       = make(chan struct{}, 100) // limit concurrent message handlers
-	dash         *dashboard.Server
 	botReady     atomic.Bool
 	connectTime  atomic.Int64 // unix milliseconds when bot connected
 )
@@ -72,24 +66,15 @@ type WrappedMessage struct {
 func main() {
 	startTime = time.Now()
 
-	// Setup restart channel
-	restartChan := make(chan struct{})
-
-	// Create dashboard early so logger can write to its log buffer.
+	// Load config
 	cfgInit, err := config.Load("config.json")
 	if err != nil {
-		// Fallback: use a basic logger to report the error.
 		basic := zerolog.New(os.Stdout).With().Timestamp().Logger()
 		basic.Fatal().Err(err).Msg("Failed to load config")
 	}
 	cfg = cfgInit
 
-	dash = dashboard.New(cfg, func() {
-		logger.Info().Msg("Restart triggered from dashboard")
-		restartChan <- struct{}{}
-	})
-	logWriter := &dashboard.LogWriter{Buffer: dash.Logs}
-	logger = initLogger(logWriter)
+	logger = initLogger()
 
 	cmds = registry.New()
 
@@ -139,36 +124,16 @@ func main() {
 		}
 	}()
 
-	// Start dashboard
-	dash.Commands = cmds
-	dash.Start(cfg.Port)
+	ctx, cancel := context.WithCancel(context.Background())
+	go runBot(ctx)
 
-	for {
-		ctx, cancel := context.WithCancel(context.Background())
-		go runBot(ctx)
+	// Wait for termination signal
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
 
-		// Wait for signal or restart request
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-
-		select {
-		case <-sig:
-			cancel()
-			return
-		case <-restartChan:
-			cancel()
-			logger.Info().Msg("Restarting bot...")
-			// Reload config
-			cfg, err = config.Load("config.json")
-			if err != nil {
-				logger.Error().Err(err).Msg("Failed to reload config")
-			}
-			// Update modules if needed (re-registering might require clearing old ones or creating new registry)
-			// For simplicity, we just reload config values, but adding/removing modules requires logic.
-			// Currently, we just restart the bot loop, but registry is initialized outside.
-			// Ideally we should re-init registry here too.
-		}
-	}
+	cancel()
+	logger.Info().Msg("Bot stopped")
 }
 
 func enabled(modules map[string]bool, name string) bool {
@@ -208,15 +173,12 @@ func runBot(ctx context.Context) {
 	selfID = user.GetFBID()
 	logger.Info().Int64("id", selfID).Msg("Logged in")
 
-	dash.SetConnected(true)
-
 	err = client.Connect(ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to connect")
 	}
 
 	<-ctx.Done()
-	dash.SetConnected(false)
 	client.Disconnect()
 }
 
@@ -293,8 +255,6 @@ func handleMessage(msg *WrappedMessage) {
 	if _, loaded := seenMessages.LoadOrStore(msg.MessageId, struct{}{}); loaded {
 		return
 	}
-
-	dash.IncrementMessages()
 
 	fbClient := facebook.NewClient(client, selfID)
 
