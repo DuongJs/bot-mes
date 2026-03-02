@@ -4,134 +4,98 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
-	"regexp"
+	"net/url"
+	"strings"
 	"time"
 )
 
 const (
-	TikTokAPI = "https://api16-normal-c-useast2a.tiktokv.com/aweme/v1/feed/"
-	TikTokUA  = "TikTok 26.2.0 rv:262018 (iPhone; iOS 14.4.2; en_US) Cronet"
+	TikWMAPI = "https://www.tikwm.com/api/"
 )
 
-var (
-	awemeIDRegex = regexp.MustCompile(`/video/(\d+)|/photo/(\d+)|/note/(\d+)`)
-)
-
-type TikTokResponse struct {
-	AwemeList []struct {
-		ImagePostInfo *struct {
-			Images []struct {
-				DisplayImage *struct {
-					URLList []string `json:"url_list"`
-				} `json:"display_image"`
-				URLList []string `json:"url_list"`
-			} `json:"images"`
-		} `json:"image_post_info"`
-		Video *struct {
-			PlayAddr *struct {
-				URLList []string `json:"url_list"`
-			} `json:"play_addr"`
-		} `json:"video"`
-	} `json:"aweme_list"`
+// tikwmResponse represents the tikwm.com API response.
+type tikwmResponse struct {
+	Code          int    `json:"code"`
+	Msg           string `json:"msg"`
+	ProcessedTime float64 `json:"processed_time"`
+	Data          tikwmData `json:"data"`
 }
 
-// extractAwemeID extracts the aweme/video ID from a TikTok or Douyin URL.
-func extractAwemeID(url string) string {
-	matches := awemeIDRegex.FindStringSubmatch(url)
-	if len(matches) < 2 {
-		return ""
-	}
-	for _, m := range matches[1:] {
-		if m != "" {
-			return m
-		}
-	}
-	return ""
+type tikwmData struct {
+	ID        string       `json:"id"`
+	Title     string       `json:"title"`
+	Play      string       `json:"play"`       // video download URL (no watermark)
+	Hdplay    string       `json:"hdplay"`     // HD video URL
+	Images    []string     `json:"images"`     // slideshow image URLs
 }
 
-func GetTikTokMedia(ctx context.Context, url string) ([]MediaItem, error) {
-	// Resolve short URL
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create tiktok request: %w", err)
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve tiktok url: %w", err)
-	}
-	finalURL := resp.Request.URL.String()
-	resp.Body.Close()
-
-	// Extract Aweme ID
-	awemeID := extractAwemeID(finalURL)
-	if awemeID == "" {
-		return nil, fmt.Errorf("no aweme_id found in %s", finalURL)
-	}
-
-	// Fetch from API with retry (10 attempts, with backoff)
-	apiURL := fmt.Sprintf("%s?aweme_id=%s", TikTokAPI, awemeID)
+func GetTikTokMedia(ctx context.Context, rawURL string) ([]MediaItem, error) {
 	var lastErr error
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 3; i++ {
 		if i > 0 {
-			backoff := time.Duration(i) * 200 * time.Millisecond
+			backoff := time.Duration(i) * 500 * time.Millisecond
 			select {
 			case <-time.After(backoff):
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
 		}
-		items, err := doTikTokAPIRequest(ctx, apiURL)
+		items, err := doTikWMRequest(ctx, rawURL)
 		if err != nil {
 			lastErr = err
 			continue
 		}
 		return items, nil
 	}
-	return nil, fmt.Errorf("tiktok api failed after 10 retries: %w", lastErr)
+	return nil, fmt.Errorf("tikwm api failed after 3 retries: %w", lastErr)
 }
 
-func doTikTokAPIRequest(ctx context.Context, apiURL string) ([]MediaItem, error) {
-	apiReq, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+func doTikWMRequest(ctx context.Context, tiktokURL string) ([]MediaItem, error) {
+	// Build form body
+	form := url.Values{}
+	form.Set("url", tiktokURL)
+	form.Set("hd", "1")
+
+	apiReq, err := http.NewRequestWithContext(ctx, "POST", TikWMAPI, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create api request: %w", err)
+		return nil, fmt.Errorf("failed to create tikwm request: %w", err)
 	}
-	apiReq.Header.Set("User-Agent", TikTokUA)
+	apiReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	apiReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 	apiResp, err := httpClient.Do(apiReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call tiktok api: %w", err)
+		return nil, fmt.Errorf("failed to call tikwm api: %w", err)
 	}
 	defer apiResp.Body.Close()
 
+	body, err := io.ReadAll(io.LimitReader(apiResp.Body, 2*1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read tikwm response: %w", err)
+	}
+
 	if apiResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("tiktok api returned status: %d", apiResp.StatusCode)
+		return nil, fmt.Errorf("tikwm api returned status %d: %s", apiResp.StatusCode, string(body))
 	}
 
-	var data TikTokResponse
-	if err := json.NewDecoder(apiResp.Body).Decode(&data); err != nil {
-		return nil, fmt.Errorf("failed to decode tiktok api response: %w", err)
+	var data tikwmResponse
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, fmt.Errorf("failed to decode tikwm response: %w", err)
 	}
 
-	if len(data.AwemeList) == 0 {
-		return nil, fmt.Errorf("no tiktok data found")
+	if data.Code != 0 {
+		return nil, fmt.Errorf("tikwm api error: %s", data.Msg)
 	}
 
-	aweme := data.AwemeList[0]
 	var items []MediaItem
 
 	// Slideshow (images)
-	if aweme.ImagePostInfo != nil && len(aweme.ImagePostInfo.Images) > 0 {
-		for _, img := range aweme.ImagePostInfo.Images {
-			var url string
-			if img.DisplayImage != nil && len(img.DisplayImage.URLList) > 0 {
-				url = img.DisplayImage.URLList[0]
-			} else if len(img.URLList) > 0 {
-				url = img.URLList[0]
-			}
-			if url != "" {
-				items = append(items, MediaItem{Type: Image, URL: url})
+	if len(data.Data.Images) > 0 {
+		for _, imgURL := range data.Data.Images {
+			if imgURL != "" {
+				items = append(items, MediaItem{Type: Image, URL: imgURL})
 			}
 		}
 		if len(items) > 0 {
@@ -139,10 +103,14 @@ func doTikTokAPIRequest(ctx context.Context, apiURL string) ([]MediaItem, error)
 		}
 	}
 
-	// Video
-	if aweme.Video != nil && aweme.Video.PlayAddr != nil && len(aweme.Video.PlayAddr.URLList) > 0 {
-		return []MediaItem{{Type: Video, URL: aweme.Video.PlayAddr.URLList[0]}}, nil
+	// Video – prefer HD
+	videoURL := data.Data.Hdplay
+	if videoURL == "" {
+		videoURL = data.Data.Play
+	}
+	if videoURL != "" {
+		return []MediaItem{{Type: Video, URL: videoURL}}, nil
 	}
 
-	return nil, fmt.Errorf("no video or images found")
+	return nil, fmt.Errorf("no video or images found in tikwm response")
 }
