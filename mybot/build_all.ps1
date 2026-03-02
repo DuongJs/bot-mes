@@ -37,4 +37,17 @@ if ($LASTEXITCODE -ne 0) { Write-Host "Linux build failed!" -ForegroundColor Red
 Write-Host "Copying config.example.json to config.json..." -ForegroundColor Cyan
 Copy-Item ".\config.example.json" -Destination "$Build_Dir\config.json"
 
+# If UPX is installed, compress the generated binaries to reduce size
+$upxCmd = Get-Command upx -ErrorAction SilentlyContinue
+if ($upxCmd) {
+    Write-Host "Compressing binaries with UPX (best)..." -ForegroundColor Cyan
+    & upx --best --lzma "$Build_Dir\$App_Name-windows.exe"
+    if ($LASTEXITCODE -ne 0) { Write-Host "UPX failed on Windows binary" -ForegroundColor Yellow }
+    & upx --best --lzma "$Build_Dir\$App_Name-linux"
+    if ($LASTEXITCODE -ne 0) { Write-Host "UPX failed on Linux binary" -ForegroundColor Yellow }
+} else {
+    Write-Host "UPX not found: binaries will NOT be compressed." -ForegroundColor Yellow
+    Write-Host "To install UPX on Windows: `choco install upx` or visit https://upx.github.io/" -ForegroundColor Yellow
+}
+
 Write-Host "Done! All files are in the '$Build_Dir' folder." -ForegroundColor Green

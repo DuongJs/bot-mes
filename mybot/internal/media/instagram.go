@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const (
@@ -159,6 +160,14 @@ func igGraphQLRequest(ctx context.Context, shortcode string, retries int) (*Inst
 
 	var lastErr error
 	for attempt := 0; attempt <= retries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt) * 200 * time.Millisecond
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 		result, err := doIGRequest(ctx, form)
 		if err != nil {
 			lastErr = err

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 	"mybot/internal/config"
 	"mybot/internal/core"
 	"mybot/internal/media"
+	"mybot/internal/messaging"
 	"mybot/internal/modules/coinflip"
 	"mybot/internal/modules/help"
 	"mybot/internal/modules/info"
@@ -44,15 +46,23 @@ var urlRegex = regexp.MustCompile(`https?://\S+`)
 var (
 	logger       zerolog.Logger
 	cfg          *config.Config
+	clientMu     sync.RWMutex
 	client       *messagix.Client
 	cmds         *registry.Registry
+	messageAPI   *messaging.Service
+	legacySender *messaging.LegacySender
 	startTime    time.Time
 	mediaService *mediaMod.Service
-	selfID       int64
+	selfID       atomic.Int64
 	seenMessages sync.Map
 	msgSem       = make(chan struct{}, 100) // limit concurrent message handlers
 	botReady     atomic.Bool
 	connectTime  atomic.Int64 // unix milliseconds when bot connected
+
+	// fullReconnectCh signals the bot loop to perform a full reconnect
+	// (disconnect, reload messages page, reconnect).
+	fullReconnectCh     = make(chan struct{}, 1)
+	stopPeriodicReconn  atomic.Pointer[context.CancelFunc]
 )
 
 type WrappedMessage struct {
@@ -64,10 +74,12 @@ type WrappedMessage struct {
 }
 
 func main() {
+	const configPath = "config.json"
+
 	startTime = time.Now()
 
 	// Load config
-	cfgInit, err := config.Load("config.json")
+	cfgInit, err := config.Load(configPath)
 	if err != nil {
 		basic := zerolog.New(os.Stdout).With().Timestamp().Logger()
 		basic.Fatal().Err(err).Msg("Failed to load config")
@@ -75,6 +87,40 @@ func main() {
 	cfg = cfgInit
 
 	logger = initLogger()
+
+	dbPath, err := config.ResolveMessageDBPath(configPath, cfg)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Failed to resolve message DB path")
+	}
+	store, err := messaging.OpenSQLiteStore(dbPath)
+	if err != nil {
+		logger.Fatal().Err(err).Str("path", dbPath).Msg("Failed to open message DB")
+	}
+	messageAPI = messaging.NewService(
+		logger,
+		store,
+		func() int64 { return selfID.Load() },
+		func() messaging.Transport {
+			clientMu.RLock()
+			c := client
+			clientMu.RUnlock()
+			if c == nil {
+				return nil
+			}
+			return facebook.NewClient(c, selfID.Load(), messageAPI.Tracker())
+		},
+		func() *messagix.Client {
+			clientMu.RLock()
+			defer clientMu.RUnlock()
+			return client
+		},
+	)
+	legacySender = messaging.NewLegacySender(messageAPI)
+	defer func() {
+		if err := messageAPI.Close(); err != nil {
+			logger.Error().Err(err).Msg("Failed to close message DB")
+		}
+	}()
 
 	cmds = registry.New()
 
@@ -137,20 +183,43 @@ func main() {
 }
 
 func enabled(modules map[string]bool, name string) bool {
-	if v, ok := modules[name]; ok {
-		return v
-	}
-	// Default to true if not specified? Or false?
-	// Given config.example.json has them explicitly, let's assume false if missing, or true if map is nil/empty (legacy)
 	if len(modules) == 0 {
+		// No modules configured at all → enable everything (legacy/default).
 		return true
 	}
-	return false
+	// Explicitly configured → return the value, default false if absent.
+	return modules[name]
+}
+
+// fullReconnect tears down the current connection and starts fresh.
+func fullReconnect() {
+	select {
+	case fullReconnectCh <- struct{}{}:
+	default:
+		// already pending
+	}
 }
 
 func runBot(ctx context.Context) {
-	botReady.Store(false)
+	for {
+		botReady.Store(false)
+		runBotOnce(ctx)
 
+		if ctx.Err() != nil {
+			return
+		}
+
+		// Wait for a full reconnect signal or context cancellation
+		select {
+		case <-fullReconnectCh:
+			logger.Info().Msg("Full reconnect requested, restarting bot session...")
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func runBotOnce(ctx context.Context) {
 	c := cookies.NewCookies()
 	c.Platform = types.Facebook
 	for k, v := range cfg.Cookies {
@@ -159,27 +228,94 @@ func runBot(ctx context.Context) {
 		}
 	}
 
-	client = messagix.NewClient(c, logger, &messagix.Config{
+	newClient := messagix.NewClient(c, logger, &messagix.Config{
 		MayConnectToDGW: true,
 	})
+	clientMu.Lock()
+	client = newClient
+	clientMu.Unlock()
 
-	client.SetEventHandler(handleEvent)
+	newClient.SetEventHandler(handleEvent)
 
-	user, _, err := client.LoadMessagesPage(ctx)
+	user, initialTable, err := newClient.LoadMessagesPage(ctx)
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to load messages page")
+		logger.Error().Err(err).Msg("Failed to load messages page, retrying in 30s...")
+		select {
+		case <-time.After(30 * time.Second):
+		case <-ctx.Done():
+		}
+		fullReconnect()
 		return
 	}
-	selfID = user.GetFBID()
-	logger.Info().Int64("id", selfID).Msg("Logged in")
-
-	err = client.Connect(ctx)
-	if err != nil {
-		logger.Error().Err(err).Msg("Failed to connect")
+	selfID.Store(user.GetFBID())
+	logger.Info().Int64("id", selfID.Load()).Msg("Logged in")
+	if err := messageAPI.ObserveTable(ctx, initialTable, messaging.MetadataOnly); err != nil {
+		logger.Warn().Err(err).Msg("Failed to seed startup metadata")
 	}
 
-	<-ctx.Done()
-	client.Disconnect()
+	err = newClient.Connect(ctx)
+	if err != nil {
+		logger.Error().Err(err).Msg("Failed to connect")
+		return
+	}
+
+	// Start periodic reconnect goroutine
+	go periodicReconnect()
+
+	// Block until full reconnect or shutdown
+	select {
+	case <-fullReconnectCh:
+		logger.Info().Msg("Full reconnect triggered, tearing down current session...")
+	case <-ctx.Done():
+	}
+
+	// Stop periodic reconnect
+	if cancel := stopPeriodicReconn.Load(); cancel != nil {
+		(*cancel)()
+	}
+
+	clientMu.Lock()
+	if client != nil {
+		client.Disconnect()
+		client = nil
+	}
+	clientMu.Unlock()
+
+	// Re-push the signal so runBot outer loop picks it up
+	if ctx.Err() == nil {
+		fullReconnect()
+	}
+}
+
+// periodicReconnect triggers a full reconnect on a timer.
+func periodicReconnect() {
+	intervalSec := cfg.ForceRefreshIntervalSeconds
+	if intervalSec <= 0 {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if oldCancel := stopPeriodicReconn.Swap(&cancel); oldCancel != nil {
+		(*oldCancel)()
+	}
+
+	interval := time.Duration(intervalSec) * time.Second
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	logger.Info().Stringer("interval", interval).Msg("Periodic reconnect loop started")
+
+	for {
+		select {
+		case <-timer.C:
+			logger.Info().Msg("Periodic reconnect timer fired")
+			fullReconnect()
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func handleEvent(ctx context.Context, evt any) {
@@ -193,6 +329,11 @@ func handleEvent(ctx context.Context, evt any) {
 		botReady.Store(true)
 		logger.Info().Msg("Bot reconnected, ready to process messages")
 	case *messagix.Event_PublishResponse:
+		if e.Table != nil {
+			if err := messageAPI.ObserveTable(ctx, e.Table, messaging.FullEvents); err != nil {
+				logger.Warn().Err(err).Msg("Failed to project table update")
+			}
+		}
 		if !botReady.Load() {
 			return
 		}
@@ -232,7 +373,19 @@ func handleEvent(ctx context.Context, evt any) {
 			}
 		}
 	case *messagix.Event_SocketError:
-		logger.Error().Err(e.Err).Msg("Socket error")
+		logger.Error().Err(e.Err).Int("attempts", e.ConnectionAttempts).Msg("Socket error")
+		// After many failed socket-level reconnects, do a full reconnect
+		if e.ConnectionAttempts >= 10 {
+			logger.Warn().Msg("Too many failed reconnect attempts, triggering full reconnect")
+			fullReconnect()
+		}
+	case *messagix.Event_PermanentError:
+		logger.Error().Err(e.Err).Msg("Permanent connection error, triggering full reconnect in 30s")
+		botReady.Store(false)
+		go func() {
+			time.Sleep(30 * time.Second)
+			fullReconnect()
+		}()
 	}
 }
 
@@ -242,7 +395,7 @@ func handleMessage(msg *WrappedMessage) {
 	}
 
 	// Skip messages sent by the bot itself to prevent infinite loops
-	if selfID != 0 && msg.SenderId == selfID {
+	if sid := selfID.Load(); sid != 0 && msg.SenderId == sid {
 		return
 	}
 
@@ -256,19 +409,18 @@ func handleMessage(msg *WrappedMessage) {
 		return
 	}
 
-	fbClient := facebook.NewClient(client, selfID)
-
-	// Auto-detection logic (reusing MediaService)
-	if mediaService != nil {
-		urlMatch := urlRegex.FindString(msg.Text)
-		if urlMatch != "" {
-			urlMatch = strings.TrimRight(urlMatch, ".,;:!?\"'()[]{}><")
-			processMediaAuto(context.Background(), fbClient, msg.ThreadKey, urlMatch)
-			return
+	// Check if message is a command first (commands take priority over auto-detect)
+	if strings.HasPrefix(msg.Text, cfg.CommandPrefix) {
+		// Fall through to command processing below
+	} else {
+		// Auto-detection logic for non-command messages
+		if mediaService != nil {
+			urlMatch := urlRegex.FindString(msg.Text)
+			if urlMatch != "" {
+				urlMatch = strings.TrimRight(urlMatch, ".,;:!?\"'()[]{}><")
+				processMediaAuto(context.Background(), legacySender, msg.ThreadKey, urlMatch)
+			}
 		}
-	}
-
-	if !strings.HasPrefix(msg.Text, cfg.CommandPrefix) {
 		return
 	}
 
@@ -284,19 +436,22 @@ func handleMessage(msg *WrappedMessage) {
 	logger.Info().Str("cmd", cmdName).Msg("Processing command")
 
 	ctx := &core.CommandContext{
-		Ctx:       context.Background(),
-		Sender:    fbClient,
-		ThreadID:  msg.ThreadKey,
-		SenderID:  msg.SenderId,
-		Args:      args,
-		RawText:   msg.Text,
-		StartTime: startTime,
+		Ctx:               context.Background(),
+		Sender:            legacySender,
+		Messages:          messageAPI,
+		Conversation:      messageAPI,
+		ThreadID:          msg.ThreadKey,
+		SenderID:          msg.SenderId,
+		IncomingMessageID: msg.MessageId,
+		Args:              args,
+		RawText:           msg.Text,
+		StartTime:         startTime,
 	}
 
 	err := cmds.Execute(cmdName, ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("Command execution failed")
-		fbClient.SendMessage(ctx.Ctx, ctx.ThreadID, "Lỗi: "+err.Error())
+		legacySender.SendMessage(ctx.Ctx, ctx.ThreadID, "Lỗi: "+err.Error())
 	}
 }
 
@@ -339,13 +494,23 @@ func processMediaAuto(ctx context.Context, sender core.MessageSender, threadID i
 	}
 
 	// Collect all downloads
-	attachments := make([]core.MediaAttachment, 0, len(medias))
+	downloaded := make([]downloadResult, 0, len(medias))
 	for range medias {
 		r := <-results
 		if r.err != nil {
 			logger.Error().Err(r.err).Int("index", r.index).Msg("Failed to download media")
 			continue
 		}
+		downloaded = append(downloaded, r)
+	}
+
+	// Sort by original index to preserve media order
+	sort.Slice(downloaded, func(i, j int) bool {
+		return downloaded[i].index < downloaded[j].index
+	})
+
+	attachments := make([]core.MediaAttachment, 0, len(downloaded))
+	for _, r := range downloaded {
 		attachments = append(attachments, core.MediaAttachment{
 			Data:     r.data,
 			Filename: r.filename,

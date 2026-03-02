@@ -3,9 +3,14 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 )
+
+type StorageConfig struct {
+	MessageDBPath string `json:"message_db_path"`
+}
 
 type Config struct {
 	mu sync.RWMutex
@@ -20,13 +25,25 @@ type Config struct {
 
 	// Modules feature toggles
 	Modules map[string]bool `json:"modules"`
+
+	Storage StorageConfig `json:"storage"`
+
+	// ForceRefreshIntervalSeconds is the interval in seconds between periodic
+	// full reconnects. Set to 0 to disable. Default: 3600 (1 hour).
+	ForceRefreshIntervalSeconds int `json:"force_refresh_interval_seconds"`
 }
+
+const DefaultForceRefreshInterval = 3600 // 1 hour
 
 func New() *Config {
 	return &Config{
-		CommandPrefix: "!",
-		Cookies:       make(map[string]string),
-		Modules:       make(map[string]bool),
+		CommandPrefix:               "!",
+		Cookies:                     make(map[string]string),
+		Modules:                     make(map[string]bool),
+		ForceRefreshIntervalSeconds: DefaultForceRefreshInterval,
+		Storage: StorageConfig{
+			MessageDBPath: "data/messages.sqlite",
+		},
 	}
 }
 
@@ -89,6 +106,9 @@ func Load(path string) (*Config, error) {
 	if cfg.CommandPrefix == "" {
 		cfg.CommandPrefix = "!"
 	}
+	if cfg.Storage.MessageDBPath == "" {
+		cfg.Storage.MessageDBPath = "data/messages.sqlite"
+	}
 
 	// If cookie_string is provided, parse it and merge into cookies
 	cfg.mergeCookieString()
@@ -131,6 +151,7 @@ func (c *Config) Update(newCfg *Config) {
 	c.CookieString = newCfg.CookieString
 	c.Cookies = newCfg.Cookies
 	c.Modules = newCfg.Modules
+	c.Storage = newCfg.Storage
 	c.mergeCookieString()
 }
 
@@ -139,4 +160,44 @@ func (c *Config) UpdateModules(modules map[string]bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Modules = modules
+}
+
+func ResolveMessageDBPath(configPath string, cfg *Config) (string, error) {
+	if cfg == nil {
+		cfg = New()
+	}
+
+	dbPath := cfg.Storage.MessageDBPath
+	if dbPath == "" {
+		dbPath = "data/messages.sqlite"
+	}
+	if filepath.IsAbs(dbPath) {
+		return filepath.Clean(dbPath), nil
+	}
+
+	configExists := false
+	if configPath != "" {
+		if _, err := os.Stat(configPath); err == nil {
+			configExists = true
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+
+	var baseDir string
+	if configExists {
+		absConfigPath, err := filepath.Abs(configPath)
+		if err != nil {
+			return "", err
+		}
+		baseDir = filepath.Dir(absConfigPath)
+	} else {
+		exePath, err := os.Executable()
+		if err != nil {
+			return "", err
+		}
+		baseDir = filepath.Dir(exePath)
+	}
+
+	return filepath.Clean(filepath.Join(baseDir, dbPath)), nil
 }

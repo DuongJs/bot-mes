@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"time"
 )
 
 const (
@@ -69,10 +70,18 @@ func GetTikTokMedia(ctx context.Context, url string) ([]MediaItem, error) {
 		return nil, fmt.Errorf("no aweme_id found in %s", finalURL)
 	}
 
-	// Fetch from API with retry (10 attempts, no delay)
+	// Fetch from API with retry (10 attempts, with backoff)
 	apiURL := fmt.Sprintf("%s?aweme_id=%s", TikTokAPI, awemeID)
 	var lastErr error
 	for i := 0; i < 10; i++ {
+		if i > 0 {
+			backoff := time.Duration(i) * 200 * time.Millisecond
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 		items, err := doTikTokAPIRequest(ctx, apiURL)
 		if err != nil {
 			lastErr = err
@@ -84,7 +93,7 @@ func GetTikTokMedia(ctx context.Context, url string) ([]MediaItem, error) {
 }
 
 func doTikTokAPIRequest(ctx context.Context, apiURL string) ([]MediaItem, error) {
-	apiReq, err := http.NewRequestWithContext(ctx, "OPTIONS", apiURL, nil)
+	apiReq, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create api request: %w", err)
 	}

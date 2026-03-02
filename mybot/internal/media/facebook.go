@@ -64,9 +64,17 @@ func GetFacebookMedia(ctx context.Context, url string) ([]MediaItem, error) {
 		url = resolveResp.Request.URL.String()
 	}
 
-	// Retry up to 10 times with no delay
+	// Retry up to 10 times with backoff
 	var lastErr error
 	for i := 0; i < 10; i++ {
+		if i > 0 {
+			backoff := time.Duration(i) * 200 * time.Millisecond
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 		items, err := doFacebookMediaRequest(ctx, url)
 		if err != nil {
 			lastErr = err

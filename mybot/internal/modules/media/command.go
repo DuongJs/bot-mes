@@ -2,6 +2,7 @@ package media
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"mybot/internal/core"
@@ -77,22 +78,32 @@ func (c *Command) Execute(ctx *core.CommandContext) error {
 	}
 
 	// 3. Collect downloads
-	attachments := make([]core.MediaAttachment, 0, len(medias))
+	downloaded := make([]downloadResult, 0, len(medias))
 	for range medias {
 		r := <-results
 		if r.err != nil {
 			ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Tải xuống #%d thất bại: %v", r.index+1, r.err))
 			continue
 		}
+		downloaded = append(downloaded, r)
+	}
+
+	if len(downloaded) == 0 {
+		return fmt.Errorf("tất cả media đều thất bại")
+	}
+
+	// Sort by original index to preserve media order
+	sort.Slice(downloaded, func(i, j int) bool {
+		return downloaded[i].index < downloaded[j].index
+	})
+
+	attachments := make([]core.MediaAttachment, 0, len(downloaded))
+	for _, r := range downloaded {
 		attachments = append(attachments, core.MediaAttachment{
 			Data:     r.data,
 			Filename: r.filename,
 			MimeType: r.mime,
 		})
-	}
-
-	if len(attachments) == 0 {
-		return fmt.Errorf("tất cả media đều thất bại")
 	}
 
 	// 4. Send all as one message

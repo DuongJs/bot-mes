@@ -7,6 +7,10 @@
     "fr": "",
     "datr": ""
   },
+  "storage": {
+    "message_db_path": "data/messages.sqlite"
+  },
+  "force_refresh_interval_seconds": 3600,
   "modules": {
     "ping": true,
     "media": true,

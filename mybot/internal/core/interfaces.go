@@ -22,13 +22,16 @@ type MediaAttachment struct {
 
 // CommandContext provides context for command execution.
 type CommandContext struct {
-	Ctx       context.Context
-	Sender    MessageSender
-	ThreadID  int64
-	SenderID  int64
-	Args      []string
-	RawText   string
-	StartTime time.Time
+	Ctx               context.Context
+	Sender            MessageSender
+	Messages          MessageController
+	Conversation      ConversationReader
+	ThreadID          int64
+	SenderID          int64
+	IncomingMessageID string
+	Args              []string
+	RawText           string
+	StartTime         time.Time
 }
 
 // CommandHandler handles the execution of a command.

@@ -117,9 +117,13 @@ func DownloadMedia(ctx context.Context, url string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("failed to download media: %s", resp.Status)
 	}
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize))
+	// Read up to maxDownloadSize + 1 byte to detect truncation
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize+1))
 	if err != nil {
 		return nil, "", err
+	}
+	if len(data) > maxDownloadSize {
+		return nil, "", fmt.Errorf("media too large (exceeds %d bytes limit)", maxDownloadSize)
 	}
 
 	mimeType := resp.Header.Get("Content-Type")
