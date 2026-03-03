@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -21,14 +22,19 @@ type Service struct {
 	tracker          *Tracker
 	transportFactory func() Transport
 	clientFactory    func() *messagix.Client
+	rateLimiter      *RateLimiter
 
 	refreshMu            sync.Mutex
 	lastMetadataRefresh  time.Time
 	metadataRefreshEvery time.Duration
 }
 
-func NewService(log zerolog.Logger, store Store, selfIDProvider func() int64, transportFactory func() Transport, clientFactory func() *messagix.Client) *Service {
+func NewService(log zerolog.Logger, store Store, selfIDProvider func() int64, transportFactory func() Transport, clientFactory func() *messagix.Client, rateLimiterOpts ...RateLimiterOpt) *Service {
 	tracker := NewTracker()
+	rl := NewRateLimiter(30, 10) // defaults
+	for _, opt := range rateLimiterOpts {
+		opt(rl)
+	}
 	return &Service{
 		log:                  log,
 		store:                store,
@@ -36,7 +42,18 @@ func NewService(log zerolog.Logger, store Store, selfIDProvider func() int64, tr
 		tracker:              tracker,
 		transportFactory:     transportFactory,
 		clientFactory:        clientFactory,
+		rateLimiter:          rl,
 		metadataRefreshEvery: 60 * time.Second,
+	}
+}
+
+// RateLimiterOpt configures the rate limiter on the service.
+type RateLimiterOpt func(*RateLimiter)
+
+// WithRateLimit sets the rate limiter parameters.
+func WithRateLimit(ratePerSec, burst int) RateLimiterOpt {
+	return func(rl *RateLimiter) {
+		*rl = *NewRateLimiter(ratePerSec, burst)
 	}
 }
 
@@ -74,6 +91,9 @@ func (s *Service) SelfID() int64 {
 }
 
 func (s *Service) SendText(ctx context.Context, req core.SendTextRequest) (*core.MessageRecord, error) {
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limited: %w", err)
+	}
 	transport, err := s.transport()
 	if err != nil {
 		return nil, err
@@ -86,6 +106,9 @@ func (s *Service) SendText(ctx context.Context, req core.SendTextRequest) (*core
 }
 
 func (s *Service) SendMedia(ctx context.Context, req core.SendMediaRequest) (*core.MessageRecord, error) {
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limited: %w", err)
+	}
 	transport, err := s.transport()
 	if err != nil {
 		return nil, err

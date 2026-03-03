@@ -12,6 +12,63 @@ type StorageConfig struct {
 	MessageDBPath string `json:"message_db_path"`
 }
 
+// PerformanceConfig holds tuning knobs for throughput and resource usage.
+type PerformanceConfig struct {
+	// WorkerCount is the number of fixed message-handler goroutines.
+	// Default: 20.
+	WorkerCount int `json:"worker_count"`
+
+	// JobQueueSize is the buffered-channel capacity for incoming messages.
+	// Default: 500.
+	JobQueueSize int `json:"job_queue_size"`
+
+	// DBBatchSize is the max number of write operations grouped in one
+	// SQLite transaction by the write-batcher.  Default: 100.
+	DBBatchSize int `json:"db_batch_size"`
+
+	// DBBatchFlushMs is the maximum time (ms) the batcher waits before
+	// flushing a partial batch.  Default: 50.
+	DBBatchFlushMs int `json:"db_batch_flush_ms"`
+
+	// DBReadPoolSize is the number of reader connections for the SQLite
+	// read pool (WAL mode).  Default: 4.
+	DBReadPoolSize int `json:"db_read_pool_size"`
+
+	// SendRatePerSecond is the global outgoing-message rate limit.
+	// Default: 30.
+	SendRatePerSecond int `json:"send_rate_per_second"`
+
+	// SendBurst is the burst bucket size for the rate limiter.
+	// Default: 10.
+	SendBurst int `json:"send_burst"`
+
+	// MessageHandlerTimeoutSeconds is the per-message context deadline.
+	// Default: 30.
+	MessageHandlerTimeoutSeconds int `json:"message_handler_timeout_seconds"`
+
+	// MaxConcurrentDownloads is the system-wide limit on parallel media
+	// downloads.  All users/groups share this pool.  Higher values give
+	// better throughput when many users request media simultaneously,
+	// but use more network bandwidth and temp disk space.
+	// Default: 8.
+	MaxConcurrentDownloads int `json:"max_concurrent_downloads"`
+}
+
+// Defaults returns a PerformanceConfig with sensible defaults.
+func DefaultPerformanceConfig() PerformanceConfig {
+	return PerformanceConfig{
+		WorkerCount:                  20,
+		JobQueueSize:                 500,
+		DBBatchSize:                  100,
+		DBBatchFlushMs:               50,
+		DBReadPoolSize:               4,
+		SendRatePerSecond:            30,
+		SendBurst:                    10,
+		MessageHandlerTimeoutSeconds: 30,
+		MaxConcurrentDownloads:       16,
+	}
+}
+
 type Config struct {
 	mu sync.RWMutex
 
@@ -27,6 +84,9 @@ type Config struct {
 	Modules map[string]bool `json:"modules"`
 
 	Storage StorageConfig `json:"storage"`
+
+	// Performance tuning knobs.
+	Performance PerformanceConfig `json:"performance"`
 
 	// ForceRefreshIntervalSeconds is the interval in seconds between periodic
 	// full reconnects. Set to 0 to disable. Default: 3600 (1 hour).
@@ -44,6 +104,7 @@ func New() *Config {
 		Storage: StorageConfig{
 			MessageDBPath: "data/messages.sqlite",
 		},
+		Performance: DefaultPerformanceConfig(),
 	}
 }
 
@@ -110,6 +171,9 @@ func Load(path string) (*Config, error) {
 		cfg.Storage.MessageDBPath = "data/messages.sqlite"
 	}
 
+	// Apply performance defaults for zero-valued fields
+	cfg.applyPerformanceDefaults()
+
 	// If cookie_string is provided, parse it and merge into cookies
 	cfg.mergeCookieString()
 
@@ -152,7 +216,42 @@ func (c *Config) Update(newCfg *Config) {
 	c.Cookies = newCfg.Cookies
 	c.Modules = newCfg.Modules
 	c.Storage = newCfg.Storage
+	c.Performance = newCfg.Performance
+	c.applyPerformanceDefaults()
 	c.mergeCookieString()
+}
+
+// applyPerformanceDefaults fills zero-valued performance fields with defaults.
+func (c *Config) applyPerformanceDefaults() {
+	def := DefaultPerformanceConfig()
+	p := &c.Performance
+	if p.WorkerCount <= 0 {
+		p.WorkerCount = def.WorkerCount
+	}
+	if p.JobQueueSize <= 0 {
+		p.JobQueueSize = def.JobQueueSize
+	}
+	if p.DBBatchSize <= 0 {
+		p.DBBatchSize = def.DBBatchSize
+	}
+	if p.DBBatchFlushMs <= 0 {
+		p.DBBatchFlushMs = def.DBBatchFlushMs
+	}
+	if p.DBReadPoolSize <= 0 {
+		p.DBReadPoolSize = def.DBReadPoolSize
+	}
+	if p.SendRatePerSecond <= 0 {
+		p.SendRatePerSecond = def.SendRatePerSecond
+	}
+	if p.SendBurst <= 0 {
+		p.SendBurst = def.SendBurst
+	}
+	if p.MessageHandlerTimeoutSeconds <= 0 {
+		p.MessageHandlerTimeoutSeconds = def.MessageHandlerTimeoutSeconds
+	}
+	if p.MaxConcurrentDownloads <= 0 {
+		p.MaxConcurrentDownloads = def.MaxConcurrentDownloads
+	}
 }
 
 // UpdateModules updates only the Modules map.

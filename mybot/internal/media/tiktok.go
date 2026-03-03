@@ -71,17 +71,15 @@ func doTikWMRequest(ctx context.Context, tiktokURL string) ([]MediaItem, error) 
 	}
 	defer apiResp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(apiResp.Body, 2*1024*1024))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read tikwm response: %w", err)
-	}
-
 	if apiResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("tikwm api returned status %d: %s", apiResp.StatusCode, string(body))
+		snippet, _ := io.ReadAll(io.LimitReader(apiResp.Body, 200))
+		return nil, fmt.Errorf("tikwm api returned status %d: %s", apiResp.StatusCode, string(snippet))
 	}
 
+	// Stream-decode JSON directly from the response body — avoids buffering
+	// the full 2 MB response into a []byte before parsing.
 	var data tikwmResponse
-	if err := json.Unmarshal(body, &data); err != nil {
+	if err := json.NewDecoder(io.LimitReader(apiResp.Body, 2*1024*1024)).Decode(&data); err != nil {
 		return nil, fmt.Errorf("failed to decode tikwm response: %w", err)
 	}
 

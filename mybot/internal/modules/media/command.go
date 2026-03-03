@@ -2,11 +2,10 @@ package media
 
 import (
 	"fmt"
-	"sort"
+	"runtime/debug"
 	"strings"
 
 	"mybot/internal/core"
-	"mybot/internal/media"
 )
 
 type Command struct {
@@ -51,62 +50,42 @@ func (c *Command) Execute(ctx *core.CommandContext) error {
 
 	ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Tìm thấy %d media, đang xử lý...", len(medias)))
 
-	// 2. Download all in parallel
-	type downloadResult struct {
-		index    int
-		data     []byte
-		mime     string
-		filename string
-		err      error
-	}
+	// 2. Download all to temp files via the global download pool.
+	//    The pool limits system-wide concurrency (default 8), so many users
+	//    can download simultaneously without OOM, while one user with 10
+	//    images gets all available slots for maximum speed.
+	results := c.Service.DownloadBatch(ctx.Ctx, medias)
 
-	results := make(chan downloadResult, len(medias))
-	for i, m := range medias {
-		go func(idx int, item media.MediaItem) {
-			data, mime, err := c.Service.Download(ctx.Ctx, item.URL)
-			if err != nil {
-				results <- downloadResult{index: idx, err: err}
-				return
+	// Ensure all temp files are cleaned up when we're done.
+	defer func() {
+		for i := range results {
+			if results[i].File != nil {
+				results[i].File.Cleanup()
 			}
-			results <- downloadResult{
-				index:    idx,
-				data:     data,
-				mime:     mime,
-				filename: media.FilenameFromMIME(mime),
-			}
-		}(i, m)
-	}
+		}
+		debug.FreeOSMemory()
+	}()
 
-	// 3. Collect downloads
-	downloaded := make([]downloadResult, 0, len(medias))
-	for range medias {
-		r := <-results
-		if r.err != nil {
-			ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Tải xuống #%d thất bại: %v", r.index+1, r.err))
+	// 3. Collect successful downloads.
+	var attachments []core.MediaAttachment
+	for _, r := range results {
+		if r.Err != nil {
+			ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Tải xuống #%d thất bại: %v", r.Index+1, r.Err))
 			continue
 		}
-		downloaded = append(downloaded, r)
-	}
-
-	if len(downloaded) == 0 {
-		return fmt.Errorf("tất cả media đều thất bại")
-	}
-
-	// Sort by original index to preserve media order
-	sort.Slice(downloaded, func(i, j int) bool {
-		return downloaded[i].index < downloaded[j].index
-	})
-
-	attachments := make([]core.MediaAttachment, 0, len(downloaded))
-	for _, r := range downloaded {
 		attachments = append(attachments, core.MediaAttachment{
-			Data:     r.data,
-			Filename: r.filename,
-			MimeType: r.mime,
+			FilePath: r.File.Path,
+			FileSize: r.File.Size,
+			Filename: r.File.Filename,
+			MimeType: r.File.MimeType,
 		})
 	}
 
-	// 4. Send all as one message
+	if len(attachments) == 0 {
+		return fmt.Errorf("tất cả media đều thất bại")
+	}
+
+	// 4. Send — upload reads data one file at a time from disk, releases immediately.
 	if err := ctx.Sender.SendMultiMedia(ctx.Ctx, ctx.ThreadID, attachments); err != nil {
 		ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Gửi media thất bại: %v", err))
 	}

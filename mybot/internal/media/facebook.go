@@ -60,7 +60,9 @@ func GetFacebookMedia(ctx context.Context, url string) ([]MediaItem, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve share url: %w", err)
 		}
-		defer resolveResp.Body.Close()
+		// Drain and close body so the connection can be reused.
+		io.Copy(io.Discard, resolveResp.Body)
+		resolveResp.Body.Close()
 		url = resolveResp.Request.URL.String()
 	}
 
@@ -110,7 +112,10 @@ func doFacebookMediaRequest(ctx context.Context, url string) ([]MediaItem, error
 	if err != nil {
 		return nil, fmt.Errorf("failed to read body: %w", err)
 	}
+	// Convert to string for regex matching, then release the []byte immediately
+	// so we don't hold both the raw bytes (5 MB) and the string (5 MB) at once.
 	data := string(bodyBytes)
+	bodyBytes = nil //nolint:ineffassign
 
 	// Unescape like in JS: .replace(/&quot;/g, '"').replace(/&amp;/g, '&');
 	data = strings.ReplaceAll(data, "&quot;", "\"")

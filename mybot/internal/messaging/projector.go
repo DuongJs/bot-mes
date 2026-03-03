@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix/table"
@@ -28,10 +29,78 @@ type ProjectionResult struct {
 	EditedMessageIDs map[string]struct{}
 }
 
+// ── LRU existence cache ─────────────────────────────────────────────────────
+
+// existenceCache is a simple bounded set that remembers whether a thread/user
+// exists to avoid redundant DB reads during projection.
+type existenceCache struct {
+	mu       sync.Mutex
+	threads  map[int64]struct{}
+	users    map[int64]struct{}
+	maxItems int
+}
+
+func newExistenceCache(maxItems int) *existenceCache {
+	if maxItems <= 0 {
+		maxItems = 2048
+	}
+	return &existenceCache{
+		threads:  make(map[int64]struct{}, 256),
+		users:    make(map[int64]struct{}, 256),
+		maxItems: maxItems,
+	}
+}
+
+func (c *existenceCache) hasThread(id int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.threads[id]
+	return ok
+}
+
+func (c *existenceCache) addThread(id int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.threads) >= c.maxItems {
+		// Cheap eviction: clear half.
+		for k := range c.threads {
+			delete(c.threads, k)
+			if len(c.threads) < c.maxItems/2 {
+				break
+			}
+		}
+	}
+	c.threads[id] = struct{}{}
+}
+
+func (c *existenceCache) hasUser(id int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.users[id]
+	return ok
+}
+
+func (c *existenceCache) addUser(id int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.users) >= c.maxItems {
+		for k := range c.users {
+			delete(c.users, k)
+			if len(c.users) < c.maxItems/2 {
+				break
+			}
+		}
+	}
+	c.users[id] = struct{}{}
+}
+
+// ── Projector ───────────────────────────────────────────────────────────────
+
 type Projector struct {
 	store          Store
 	selfIDProvider func() int64
 	now            func() time.Time
+	cache          *existenceCache
 }
 
 func NewProjector(store Store, selfIDProvider func() int64) *Projector {
@@ -39,6 +108,7 @@ func NewProjector(store Store, selfIDProvider func() int64) *Projector {
 		store:          store,
 		selfIDProvider: selfIDProvider,
 		now:            time.Now,
+		cache:          newExistenceCache(2048),
 	}
 }
 
@@ -57,6 +127,7 @@ func (p *Projector) ProjectTable(ctx context.Context, tbl *table.LSTable, mode P
 		EditedMessageIDs: make(map[string]struct{}),
 	}
 
+	// ── Metadata: threads ───────────────────────────────────────────────
 	for _, row := range tbl.LSUpdateOrInsertThread {
 		if err := p.upsertThread(ctx, row.ThreadKey, row.ThreadName, row.LastActivityTimestampMs, false); err != nil {
 			return nil, err
@@ -87,6 +158,7 @@ func (p *Projector) ProjectTable(ctx context.Context, tbl *table.LSTable, mode P
 		}
 	}
 
+	// ── Metadata: users ─────────────────────────────────────────────────
 	for _, row := range tbl.LSVerifyContactRowExists {
 		if err := p.upsertUser(ctx, row.ContactId, row.Name, false); err != nil {
 			return nil, err
@@ -107,20 +179,93 @@ func (p *Projector) ProjectTable(ctx context.Context, tbl *table.LSTable, mode P
 		return result, nil
 	}
 
+	// ── Messages (batched) ──────────────────────────────────────────────
 	upserts, inserts := tbl.WrapMessages()
+
+	// Pre-collect all wrapped messages.
+	var allWrapped []*table.WrappedMessage
 	for _, grouped := range upserts {
-		for _, wrapped := range grouped.Messages {
-			if err := p.upsertWrappedMessage(ctx, wrapped, result); err != nil {
-				return nil, err
-			}
-		}
+		allWrapped = append(allWrapped, grouped.Messages...)
 	}
-	for _, wrapped := range inserts {
-		if err := p.upsertWrappedMessage(ctx, wrapped, result); err != nil {
+	allWrapped = append(allWrapped, inserts...)
+
+	// Ensure thread/user existence (using cache to skip DB reads).
+	for _, w := range allWrapped {
+		if w == nil || w.LSInsertMessage == nil || w.MessageId == "" {
+			continue
+		}
+		if err := p.ensureThreadAndUser(ctx, w.ThreadKey, w.SenderId, result); err != nil {
 			return nil, err
 		}
 	}
 
+	// Build user name cache for this batch to avoid per-message lookups.
+	userNames := make(map[int64]string)
+	for _, w := range allWrapped {
+		if w == nil || w.SenderId == 0 {
+			continue
+		}
+		if _, ok := userNames[w.SenderId]; !ok {
+			user, err := p.store.GetUser(ctx, w.SenderId)
+			if err != nil {
+				return nil, err
+			}
+			userNames[w.SenderId] = nameOrDefault(user, unknownUserName)
+		}
+	}
+
+	// Project messages.
+	selfID := p.selfIDProvider()
+	nowMs := p.now().UnixMilli()
+	for _, wrapped := range allWrapped {
+		if wrapped == nil || wrapped.LSInsertMessage == nil || wrapped.MessageId == "" {
+			continue
+		}
+
+		senderName := userNames[wrapped.SenderId]
+		if senderName == "" {
+			senderName = unknownUserName
+		}
+
+		rec := &core.MessageRecord{
+			MessageID:          wrapped.MessageId,
+			ThreadID:           wrapped.ThreadKey,
+			SenderID:           wrapped.SenderId,
+			SenderNameSnapshot: senderName,
+			Text:               wrapped.Text,
+			ReplyToMessageID:   wrapped.ReplySourceId,
+			OfflineThreadingID: wrapped.OfflineThreadingId,
+			IsFromBot:          wrapped.SenderId != 0 && wrapped.SenderId == selfID,
+			HasMedia:           len(wrapped.Attachments) > 0 || len(wrapped.BlobAttachments) > 0 || len(wrapped.XMAAttachments) > 0 || len(wrapped.Stickers) > 0,
+			Attachments:        attachmentMetaFromWrapped(wrapped),
+			TimestampMs:        wrapped.TimestampMs,
+			EditCount:          wrapped.EditCount,
+			IsEdited:           wrapped.EditCount > 0,
+			IsRecalled:         wrapped.IsUnsent,
+			CreatedAtUnixMs:    nowMs,
+			UpdatedAtUnixMs:    nowMs,
+		}
+
+		if existing, err := p.store.GetMessage(ctx, wrapped.MessageId); err != nil {
+			return nil, err
+		} else if existing != nil {
+			rec.CreatedAtUnixMs = existing.CreatedAtUnixMs
+			if existing.RecalledAtUnixMs > 0 {
+				rec.RecalledAtUnixMs = existing.RecalledAtUnixMs
+			}
+		}
+
+		if err := p.store.UpsertMessage(ctx, rec); err != nil {
+			return nil, err
+		}
+		if rec.IsFromBot {
+			if err := p.store.SetLastBotMessage(ctx, rec.ThreadID, rec.MessageID); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// ── Edits ───────────────────────────────────────────────────────────
 	for _, edit := range tbl.LSEditMessage {
 		if err := p.applyEdit(ctx, edit, result); err != nil {
 			return nil, err
@@ -163,7 +308,11 @@ func (p *Projector) upsertThread(ctx context.Context, threadID int64, name strin
 		rec.Deleted = true
 	}
 	rec.UpdatedAtUnixMs = nowMs
-	return p.store.UpsertThread(ctx, rec)
+	if err := p.store.UpsertThread(ctx, rec); err != nil {
+		return err
+	}
+	p.cache.addThread(threadID)
+	return nil
 }
 
 func (p *Projector) upsertUser(ctx context.Context, userID int64, name string, deleted bool) error {
@@ -191,60 +340,10 @@ func (p *Projector) upsertUser(ctx context.Context, userID int64, name string, d
 		rec.Deleted = true
 	}
 	rec.UpdatedAtUnixMs = nowMs
-	return p.store.UpsertUser(ctx, rec)
-}
-
-func (p *Projector) upsertWrappedMessage(ctx context.Context, wrapped *table.WrappedMessage, result *ProjectionResult) error {
-	if wrapped == nil || wrapped.LSInsertMessage == nil || wrapped.MessageId == "" {
-		return nil
-	}
-
-	if err := p.ensureThreadAndUser(ctx, wrapped.ThreadKey, wrapped.SenderId, result); err != nil {
+	if err := p.store.UpsertUser(ctx, rec); err != nil {
 		return err
 	}
-
-	user, err := p.store.GetUser(ctx, wrapped.SenderId)
-	if err != nil {
-		return err
-	}
-
-	nowMs := p.now().UnixMilli()
-	rec := &core.MessageRecord{
-		MessageID:          wrapped.MessageId,
-		ThreadID:           wrapped.ThreadKey,
-		SenderID:           wrapped.SenderId,
-		SenderNameSnapshot: nameOrDefault(user, unknownUserName),
-		Text:               wrapped.Text,
-		ReplyToMessageID:   wrapped.ReplySourceId,
-		OfflineThreadingID: wrapped.OfflineThreadingId,
-		IsFromBot:          wrapped.SenderId != 0 && wrapped.SenderId == p.selfIDProvider(),
-		HasMedia:           len(wrapped.Attachments) > 0 || len(wrapped.BlobAttachments) > 0 || len(wrapped.XMAAttachments) > 0 || len(wrapped.Stickers) > 0,
-		Attachments:        attachmentMetaFromWrapped(wrapped),
-		TimestampMs:        wrapped.TimestampMs,
-		EditCount:          wrapped.EditCount,
-		IsEdited:           wrapped.EditCount > 0,
-		IsRecalled:         wrapped.IsUnsent,
-		CreatedAtUnixMs:    nowMs,
-		UpdatedAtUnixMs:    nowMs,
-	}
-
-	if existing, err := p.store.GetMessage(ctx, wrapped.MessageId); err != nil {
-		return err
-	} else if existing != nil {
-		rec.CreatedAtUnixMs = existing.CreatedAtUnixMs
-		if existing.RecalledAtUnixMs > 0 {
-			rec.RecalledAtUnixMs = existing.RecalledAtUnixMs
-		}
-	}
-
-	if err := p.store.UpsertMessage(ctx, rec); err != nil {
-		return err
-	}
-	if rec.IsFromBot {
-		if err := p.store.SetLastBotMessage(ctx, rec.ThreadID, rec.MessageID); err != nil {
-			return err
-		}
-	}
+	p.cache.addUser(userID)
 	return nil
 }
 
@@ -291,26 +390,35 @@ func (p *Projector) applyDelete(ctx context.Context, deletion *table.LSDeleteMes
 }
 
 func (p *Projector) ensureThreadAndUser(ctx context.Context, threadID, userID int64, result *ProjectionResult) error {
-	threadRec, err := p.store.GetThread(ctx, threadID)
-	if err != nil {
-		return err
-	}
-	if threadRec == nil {
-		if err := p.upsertThread(ctx, threadID, "", 0, false); err != nil {
+	// Use cache to skip DB lookups for known entities.
+	if !p.cache.hasThread(threadID) {
+		threadRec, err := p.store.GetThread(ctx, threadID)
+		if err != nil {
 			return err
 		}
-		result.MissingThreadIDs[threadID] = struct{}{}
+		if threadRec == nil {
+			if err := p.upsertThread(ctx, threadID, "", 0, false); err != nil {
+				return err
+			}
+			result.MissingThreadIDs[threadID] = struct{}{}
+		} else {
+			p.cache.addThread(threadID)
+		}
 	}
 
-	userRec, err := p.store.GetUser(ctx, userID)
-	if err != nil {
-		return err
-	}
-	if userRec == nil {
-		if err := p.upsertUser(ctx, userID, "", false); err != nil {
+	if !p.cache.hasUser(userID) {
+		userRec, err := p.store.GetUser(ctx, userID)
+		if err != nil {
 			return err
 		}
-		result.MissingUserIDs[userID] = struct{}{}
+		if userRec == nil {
+			if err := p.upsertUser(ctx, userID, "", false); err != nil {
+				return err
+			}
+			result.MissingUserIDs[userID] = struct{}{}
+		} else {
+			p.cache.addUser(userID)
+		}
 	}
 	return nil
 }

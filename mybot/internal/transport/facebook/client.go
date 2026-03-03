@@ -234,21 +234,33 @@ func (c *Client) Recall(ctx context.Context, messageID string) error {
 func (c *Client) uploadAttachmentIDs(ctx context.Context, threadID int64, items []core.MediaAttachment) ([]int64, error) {
 	ids := make([]int64, 0, len(items))
 
-	for idx, item := range items {
-		if len(item.Data) > maxUploadSize {
+	for idx := range items {
+		item := &items[idx] // pointer so Cleanup mutates the original
+
+		if item.DataSize() > int64(maxUploadSize) {
 			if len(items) == 1 {
-				return nil, fmt.Errorf("file too large (%d bytes, max %d)", len(item.Data), maxUploadSize)
+				return nil, fmt.Errorf("file too large (%d bytes, max %d)", item.DataSize(), maxUploadSize)
 			}
-			return nil, fmt.Errorf("file #%d too large (%d bytes, max %d)", idx+1, len(item.Data), maxUploadSize)
+			return nil, fmt.Errorf("file #%d too large (%d bytes, max %d)", idx+1, item.DataSize(), maxUploadSize)
 		}
 
 		var lastErr error
 		for retry := 0; retry < maxRetries; retry++ {
+			// Open a streaming reader each attempt — avoids holding the full
+			// file in RAM.  For file-backed attachments this streams from disk
+			// directly into the multipart body (~32KB peak).
+			reader, err := item.OpenReader()
+			if err != nil {
+				return nil, fmt.Errorf("failed to open media #%d: %w", idx+1, err)
+			}
+
 			uploadResp, err := c.client.SendMercuryUploadRequest(ctx, threadID, &messagix.MercuryUploadMedia{
-				Filename:  item.Filename,
-				MimeType:  item.MimeType,
-				MediaData: item.Data,
+				Filename:    item.Filename,
+				MimeType:    item.MimeType,
+				MediaReader: reader,
 			})
+			reader.Close()
+
 			if err != nil {
 				lastErr = fmt.Errorf("upload failed: %w", err)
 				continue
@@ -267,6 +279,10 @@ func (c *Client) uploadAttachmentIDs(ctx context.Context, threadID int64, items 
 			lastErr = nil
 			break
 		}
+
+		// Release temp file immediately after this item is uploaded.
+		item.Cleanup()
+
 		if lastErr != nil {
 			return nil, lastErr
 		}
@@ -336,7 +352,7 @@ func attachmentMetaFromItems(items []core.MediaAttachment, attachmentIDs []int64
 		meta := core.AttachmentMeta{
 			Filename:  item.Filename,
 			MimeType:  item.MimeType,
-			SizeBytes: int64(len(item.Data)),
+			SizeBytes: item.DataSize(),
 			Kind:      "upload",
 		}
 		if idx < len(attachmentIDs) {

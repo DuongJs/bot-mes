@@ -83,8 +83,10 @@ func GetInstagramMedia(ctx context.Context, inputURL string) ([]MediaItem, error
 		if err != nil {
 			return nil, fmt.Errorf("failed to check redirect: %w", err)
 		}
-		inputURL = resp.Request.URL.String()
+		// Drain and close body so the connection can be reused.
+		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
+		inputURL = resp.Request.URL.String()
 	}
 
 	shortcode := extractShortcode(inputURL)
@@ -214,17 +216,16 @@ func doIGRequest(ctx context.Context, form url.Values) (*InstagramResponse, erro
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxHTMLBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("instagram graphql returned status %d: %s", resp.StatusCode, string(body[:min(len(body), 200)]))
+		// Read a small snippet for the error message only.
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		return nil, fmt.Errorf("instagram graphql returned status %d: %s", resp.StatusCode, string(snippet))
 	}
 
+	// Stream-decode JSON directly from the response body — avoids loading
+	// the entire 5 MB response into a []byte before parsing.
 	var data InstagramResponse
-	if err := json.Unmarshal(body, &data); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxHTMLBytes)).Decode(&data); err != nil {
 		return nil, fmt.Errorf("failed to decode instagram response: %w", err)
 	}
 

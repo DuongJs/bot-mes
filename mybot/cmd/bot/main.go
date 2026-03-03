@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
-	"sort"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +21,7 @@ import (
 	"mybot/internal/core"
 	"mybot/internal/media"
 	"mybot/internal/messaging"
+	"mybot/internal/metrics"
 	"mybot/internal/modules/coinflip"
 	"mybot/internal/modules/help"
 	"mybot/internal/modules/info"
@@ -55,7 +56,7 @@ var (
 	mediaService *mediaMod.Service
 	selfID       atomic.Int64
 	seenMessages sync.Map
-	msgSem       = make(chan struct{}, 100) // limit concurrent message handlers
+	workerPool   *messaging.WorkerPool
 	botReady     atomic.Bool
 	connectTime  atomic.Int64 // unix milliseconds when bot connected
 
@@ -78,6 +79,9 @@ func main() {
 
 	startTime = time.Now()
 
+	// Purge leftover temp media files from previous runs.
+	media.CleanupTempDir()
+
 	// Load config
 	cfgInit, err := config.Load(configPath)
 	if err != nil {
@@ -92,13 +96,19 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to resolve message DB path")
 	}
-	store, err := messaging.OpenSQLiteStore(dbPath)
+	store, err := messaging.OpenSQLiteStore(dbPath, cfg.Performance.DBReadPoolSize)
 	if err != nil {
 		logger.Fatal().Err(err).Str("path", dbPath).Msg("Failed to open message DB")
 	}
+	batchedStore := messaging.NewBatchedStore(
+		store, logger,
+		cfg.Performance.JobQueueSize,
+		cfg.Performance.DBBatchSize,
+		cfg.Performance.DBBatchFlushMs,
+	)
 	messageAPI = messaging.NewService(
 		logger,
-		store,
+		batchedStore,
 		func() int64 { return selfID.Load() },
 		func() messaging.Transport {
 			clientMu.RLock()
@@ -114,6 +124,7 @@ func main() {
 			defer clientMu.RUnlock()
 			return client
 		},
+		messaging.WithRateLimit(cfg.Performance.SendRatePerSecond, cfg.Performance.SendBurst),
 	)
 	legacySender = messaging.NewLegacySender(messageAPI)
 	defer func() {
@@ -121,6 +132,14 @@ func main() {
 			logger.Error().Err(err).Msg("Failed to close message DB")
 		}
 	}()
+
+	// Start worker pool
+	workerPool = messaging.NewWorkerPool(
+		logger,
+		cfg.Performance.WorkerCount,
+		cfg.Performance.JobQueueSize,
+	)
+	defer workerPool.Stop()
 
 	cmds = registry.New()
 
@@ -130,8 +149,10 @@ func main() {
 	}
 
 	if enabled(cfg.Modules, "media") {
-		mediaService = mediaMod.NewService()
+		downloadPool := media.NewDownloadPool(cfg.Performance.MaxConcurrentDownloads)
+		mediaService = mediaMod.NewService(downloadPool)
 		cmds.Register(mediaMod.NewCommand(mediaService))
+		logger.Info().Int("max_concurrent", downloadPool.Capacity()).Msg("Media download pool initialized")
 	}
 
 	if enabled(cfg.Modules, "help") {
@@ -161,6 +182,7 @@ func main() {
 	}
 
 	// Periodically clean expired cooldowns and seen messages
+	metricStop := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
@@ -169,6 +191,9 @@ func main() {
 			seenMessages.Clear()
 		}
 	}()
+
+	// Start periodic metrics logging
+	go metrics.StartPeriodicLog(logger, 60*time.Second, metricStop)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go runBot(ctx)
@@ -179,6 +204,7 @@ func main() {
 	<-sig
 
 	cancel()
+	close(metricStop)
 	logger.Info().Msg("Bot stopped")
 }
 
@@ -351,11 +377,10 @@ func handleEvent(ctx context.Context, evt any) {
 					MessageId:   m.MessageId,
 					TimestampMs: m.TimestampMs,
 				}
-				msgSem <- struct{}{}
-				go func() {
-					defer func() { <-msgSem }()
+				metrics.Global.MessagesReceived.Add(1)
+				workerPool.Submit(func() {
 					handleMessage(msg)
-				}()
+				})
 			}
 			for _, m := range e.Table.LSInsertMessage {
 				msg := &WrappedMessage{
@@ -365,11 +390,10 @@ func handleEvent(ctx context.Context, evt any) {
 					MessageId:   m.MessageId,
 					TimestampMs: m.TimestampMs,
 				}
-				msgSem <- struct{}{}
-				go func() {
-					defer func() { <-msgSem }()
+				metrics.Global.MessagesReceived.Add(1)
+				workerPool.Submit(func() {
 					handleMessage(msg)
-				}()
+				})
 			}
 		}
 	case *messagix.Event_SocketError:
@@ -418,9 +442,13 @@ func handleMessage(msg *WrappedMessage) {
 			urlMatch := urlRegex.FindString(msg.Text)
 			if urlMatch != "" {
 				urlMatch = strings.TrimRight(urlMatch, ".,;:!?\"'()[]{}><")
-				processMediaAuto(context.Background(), legacySender, msg.ThreadKey, urlMatch)
+				timeout := time.Duration(cfg.Performance.MessageHandlerTimeoutSeconds) * time.Second
+				autoCtx, autoCancel := context.WithTimeout(context.Background(), timeout)
+				defer autoCancel()
+				processMediaAuto(autoCtx, legacySender, msg.ThreadKey, urlMatch)
 			}
 		}
+		metrics.Global.MessagesProcessed.Add(1)
 		return
 	}
 
@@ -435,8 +463,12 @@ func handleMessage(msg *WrappedMessage) {
 
 	logger.Info().Str("cmd", cmdName).Msg("Processing command")
 
+	timeout := time.Duration(cfg.Performance.MessageHandlerTimeoutSeconds) * time.Second
+	cmdCtx, cmdCancel := context.WithTimeout(context.Background(), timeout)
+	defer cmdCancel()
+
 	ctx := &core.CommandContext{
-		Ctx:               context.Background(),
+		Ctx:               cmdCtx,
 		Sender:            legacySender,
 		Messages:          messageAPI,
 		Conversation:      messageAPI,
@@ -453,6 +485,8 @@ func handleMessage(msg *WrappedMessage) {
 		logger.Error().Err(err).Msg("Command execution failed")
 		legacySender.SendMessage(ctx.Ctx, ctx.ThreadID, "Lỗi: "+err.Error())
 	}
+	metrics.Global.CommandsExecuted.Add(1)
+	metrics.Global.MessagesProcessed.Add(1)
 }
 
 func processMediaAuto(ctx context.Context, sender core.MessageSender, threadID int64, url string) {
@@ -467,54 +501,30 @@ func processMediaAuto(ctx context.Context, sender core.MessageSender, threadID i
 
 	logger.Info().Str("url", url).Int("count", len(medias)).Msg("Auto-detected media")
 
-	// Download all items in parallel
-	type downloadResult struct {
-		index    int
-		data     []byte
-		mime     string
-		filename string
-		err      error
-	}
+	// Download via global pool — respects system-wide concurrency limit.
+	results := mediaService.DownloadBatch(ctx, medias)
 
-	results := make(chan downloadResult, len(medias))
-	for i, m := range medias {
-		go func(idx int, item media.MediaItem) {
-			data, mime, err := mediaService.Download(ctx, item.URL)
-			if err != nil {
-				results <- downloadResult{index: idx, err: err}
-				return
+	// Ensure all temp files are cleaned up when done.
+	defer func() {
+		for i := range results {
+			if results[i].File != nil {
+				results[i].File.Cleanup()
 			}
-			results <- downloadResult{
-				index:    idx,
-				data:     data,
-				mime:     mime,
-				filename: media.FilenameFromMIME(mime),
-			}
-		}(i, m)
-	}
+		}
+		debug.FreeOSMemory()
+	}()
 
-	// Collect all downloads
-	downloaded := make([]downloadResult, 0, len(medias))
-	for range medias {
-		r := <-results
-		if r.err != nil {
-			logger.Error().Err(r.err).Int("index", r.index).Msg("Failed to download media")
+	var attachments []core.MediaAttachment
+	for _, r := range results {
+		if r.Err != nil {
+			logger.Error().Err(r.Err).Int("index", r.Index).Msg("Failed to download media")
 			continue
 		}
-		downloaded = append(downloaded, r)
-	}
-
-	// Sort by original index to preserve media order
-	sort.Slice(downloaded, func(i, j int) bool {
-		return downloaded[i].index < downloaded[j].index
-	})
-
-	attachments := make([]core.MediaAttachment, 0, len(downloaded))
-	for _, r := range downloaded {
 		attachments = append(attachments, core.MediaAttachment{
-			Data:     r.data,
-			Filename: r.filename,
-			MimeType: r.mime,
+			FilePath: r.File.Path,
+			FileSize: r.File.Size,
+			Filename: r.File.Filename,
+			MimeType: r.File.MimeType,
 		})
 	}
 
@@ -522,7 +532,7 @@ func processMediaAuto(ctx context.Context, sender core.MessageSender, threadID i
 		return
 	}
 
-	// Send all as one message
+	// Send — upload reads one file at a time from disk.
 	if err := sender.SendMultiMedia(ctx, threadID, attachments); err != nil {
 		logger.Error().Err(err).Msg("Failed to send media")
 	}
