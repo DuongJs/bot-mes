@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/textproto"
 	"time"
@@ -19,7 +20,12 @@ import (
 type MercuryUploadMedia struct {
 	Filename  string
 	MimeType  string
-	MediaData []byte
+	MediaData []byte // legacy: in-memory data
+
+	// MediaReader, if set, is used instead of MediaData to stream file
+	// content directly into the multipart body.  This avoids holding the
+	// entire file in a separate []byte while building the upload payload.
+	MediaReader io.Reader
 
 	IsVoiceClip  bool
 	WaveformData *WaveformData
@@ -171,7 +177,11 @@ func (c *Client) newMercuryMediaPayload(media *MercuryUploadMedia) ([]byte, stri
 		return nil, "", fmt.Errorf("messagix-mercury: Failed to create multipart writer (%w)", err)
 	}
 
-	_, err = mediaPart.Write(media.MediaData)
+	if media.MediaReader != nil {
+		_, err = io.Copy(mediaPart, media.MediaReader)
+	} else {
+		_, err = mediaPart.Write(media.MediaData)
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("messagix-mercury: Failed to write data to multipart section (%w)", err)
 	}
