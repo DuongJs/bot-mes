@@ -78,6 +78,14 @@ type AutoLoginConfig struct {
 	TwoFASecret string `json:"two_fa_secret"`
 }
 
+// TokensConfig stores the login tokens obtained from auto-login.
+type TokensConfig struct {
+	// LoginToken is the EAAAAU... token from the bloks login API (before session exchange)
+	LoginToken string `json:"login_token"`
+	// AccessToken from auth.getSessionForApp (after session exchange)
+	AccessToken string `json:"access_token"`
+}
+
 type Config struct {
 	mu sync.RWMutex
 
@@ -103,6 +111,9 @@ type Config struct {
 
 	// AutoLogin holds credentials for automatic login when cookies expire.
 	AutoLogin AutoLoginConfig `json:"auto_login"`
+
+	// Tokens stores login tokens obtained from auto-login.
+	Tokens TokensConfig `json:"tokens"`
 }
 
 const DefaultForceRefreshInterval = 3600 // 1 hour
@@ -234,12 +245,16 @@ func (c *Config) Update(newCfg *Config) {
 	c.mergeCookieString()
 }
 
-// UpdateCookies updates the cookie string and map, then saves to disk.
-func (c *Config) UpdateCookies(cookieString string, cookies map[string]string, configPath string) error {
+// UpdateCookies updates the cookie string, map, and tokens, then saves to disk.
+func (c *Config) UpdateCookies(cookieString string, cookies map[string]string, loginToken, accessToken, configPath string) error {
 	c.mu.Lock()
 	c.CookieString = cookieString
 	for k, v := range cookies {
 		c.Cookies[k] = v
+	}
+	c.Tokens = TokensConfig{
+		LoginToken:  loginToken,
+		AccessToken: accessToken,
 	}
 	c.mu.Unlock()
 	return c.Save(configPath)

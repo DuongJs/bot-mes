@@ -566,13 +566,15 @@ func getSessionForApp(accessToken string) (*sessionForAppResp, error) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-// LoginResult contains the cookies obtained from a successful login.
+// LoginResult contains the cookies and tokens obtained from a successful login.
 type LoginResult struct {
 	// Cookies is a map of cookie name → value (c_user, xs, fr, datr, etc.)
 	Cookies map[string]string
 	// CookieString is "c_user=...;xs=...;fr=...;datr=..."
 	CookieString string
-	// AccessToken from getSessionForApp
+	// LoginToken is the EAAAAU... token from the login API (before session exchange)
+	LoginToken string
+	// AccessToken from getSessionForApp (after session exchange)
 	AccessToken string
 }
 
@@ -617,6 +619,7 @@ func Login(uid, plainPassword, twoFASecret string) (*LoginResult, error) {
 	return &LoginResult{
 		Cookies:      cookieMap,
 		CookieString: strings.Join(parts, ";"),
+		LoginToken:   loginToken,
 		AccessToken:  session.AccessToken,
 	}, nil
 }

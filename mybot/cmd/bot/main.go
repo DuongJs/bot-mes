@@ -587,12 +587,17 @@ func hasCookies(cookies map[string]string) bool {
 }
 
 // doAutoLogin performs a Facebook login using credentials from config,
-// then updates the config with fresh cookies and saves to disk.
+// then updates the config with fresh cookies and both tokens, and saves to disk.
 func doAutoLogin() error {
 	result, err := fblogin.Login(cfg.AutoLogin.UID, cfg.AutoLogin.Password, cfg.AutoLogin.TwoFASecret)
 	if err != nil {
 		return err
 	}
 
-	return cfg.UpdateCookies(result.CookieString, result.Cookies, configPath)
+	logger.Info().
+		Str("login_token", result.LoginToken[:20]+"...").
+		Str("access_token", result.AccessToken[:20]+"...").
+		Msg("Auto-login obtained tokens")
+
+	return cfg.UpdateCookies(result.CookieString, result.Cookies, result.LoginToken, result.AccessToken, configPath)
 }
