@@ -1,6 +1,6 @@
 # MyBot — Tài liệu đầy đủ
 
-> Phiên bản: 2.0 • Cập nhật: 2026-03-02
+> Phiên bản: 2.1 • Cập nhật: 2026-03-05
 > Ngôn ngữ: Go 1.25+ • Giao thức: Facebook Messenger (Messagix / mautrix-meta)
 
 ---
@@ -24,6 +24,7 @@
 15. [Cấu trúc thư mục dự án](#15-cấu-trúc-thư-mục-dự-án)
 16. [Gỡ lỗi & Logs](#16-gỡ-lỗi--logs)
 17. [Giới hạn & Lưu ý kỹ thuật](#17-giới-hạn--lưu-ý-kỹ-thuật)
+18. [Transport API — Danh sách đầy đủ](#18-transport-api--danh-sách-đầy-đủ)
 
 ---
 
@@ -948,3 +949,803 @@ mybot/
 | Edit confirm timeout | 5 giây | Chờ xác nhận sửa từ WebSocket |
 | Metadata refresh cooldown | 60 giây | Tránh spam LoadMessagesPage |
 | SQLite connections | 1 (writer) | WAL mode, busy timeout 5s |
+---
+
+## 18. Transport API — Danh sách đầy đủ
+
+> Phiên bản: 2.1 • Cập nhật: 2026-03-05
+>
+> Tất cả các method dưới đây nằm trên `*facebook.Client` (`mybot/internal/transport/facebook`).
+> Tầng dưới (low-level) nằm ở `messagix/socket` (MQTT) và `messagix/facebook.go` (HTTP/GraphQL).
+
+### Mục lục nhanh
+
+| # | Nhóm | Phương thức | Giao thức |
+|---|------|------------|-----------|
+| 1 | [Messaging cơ bản](#181-messaging-cơ-bản) | SendMessage, SendText, SendMedia, SendMultiMedia, SendMediaRich | MQTT |
+| 2 | [Reply & Edit & Recall](#182-reply--edit--recall) | SendText (ReplyTo), EditText, Recall | MQTT |
+| 3 | [Reactions](#183-reactions) | SendReaction | MQTT |
+| 4 | [Forward & Share](#184-forward--share) | ForwardMessage, ShareContact | MQTT |
+| 5 | [Thread quản lý](#185-thread-quản-lý) | SetThreadImage, CreatePoll, RenameThread, MuteThread, DeleteThread, MarkThreadRead | MQTT |
+| 6 | [Thành viên nhóm](#186-thành-viên-nhóm) | AddParticipants, RemoveParticipant, UpdateAdmin | MQTT |
+| 7 | [Tuỳ chỉnh thread](#187-tuỳ-chỉnh-thread) | ChangeNickname, ChangeThreadColor, ChangeThreadEmoji | MQTT |
+| 8 | [Typing indicator](#188-typing-indicator) | SendTypingIndicator | MQTT (stateless) |
+| 9 | [Archive & Block](#189-archive--block) | ChangeArchivedStatus, ChangeBlockedStatus | HTTP POST |
+| 10 | [Delivery & Seen](#1810-delivery--seen) | MarkAsDelivered, MarkAsSeen, MarkAllRead | HTTP POST |
+| 11 | [Message Request](#1811-message-request) | HandleMessageRequest | HTTP POST |
+| 12 | [Tìm kiếm & Ảnh](#1812-tìm-kiếm--ảnh) | SearchForThread, GetThreadPictures, ResolvePhotoURL | HTTP POST |
+| 13 | [GraphQL — User Info](#1813-graphql--user-info) | GetUserInfo, GetUserInfoV2 | GraphQL |
+| 14 | [GraphQL — Themes](#1814-graphql--themes) | CreateThemeAI, GetThemePictures | GraphQL |
+| 15 | [GraphQL — Post Reaction](#1815-graphql--post-reaction) | SetPostReaction | GraphQL |
+| 16 | [Bạn bè / Social](#1816-bạn-bè--social) | HandleFriendRequest, Unfriend | HTTP POST |
+| 17 | [Token & Kết nối](#1817-token--kết-nối) | RefreshTokens, StartTokenRefreshLoop | Internal |
+| 18 | [Broadcast & Scheduler](#1818-broadcast--scheduler) | Broadcast, Scheduler | Utility |
+
+---
+
+### 18.1 Messaging cơ bản
+
+#### `SendMessage(ctx, threadID, text) error`
+
+Gửi tin nhắn text đơn giản. Wrapper nhanh của `SendText`.
+
+```go
+err := client.SendMessage(ctx, 123456789, "Hello!")
+```
+
+| Param | Kiểu | Mô tả |
+|-------|------|-------|
+| `threadID` | `int64` | ID thread (nhóm hoặc cá nhân) |
+| `text` | `string` | Nội dung tin nhắn |
+
+---
+
+#### `SendText(ctx, req) (*MessageRecord, error)`
+
+Gửi tin nhắn text đầy đủ, hỗ trợ reply, trả về metadata.
+
+```go
+rec, err := client.SendText(ctx, core.SendTextRequest{
+    ThreadID: 123456789,
+    Text:     "Xin chào!",
+    ReplyTo:  &core.ReplyTarget{MessageID: "mid.xxx"}, // tuỳ chọn
+})
+// rec.MessageID, rec.TimestampMs
+```
+
+- **Giao thức:** MQTT `SendMessageTask`
+- **Retry:** 3 lần với backoff (500ms, 1s, 1.5s)
+- **Dedup:** OTID được generate 1 lần, tái sử dụng qua các retry
+
+---
+
+#### `SendMedia(ctx, threadID, data, filename, mimeType) error`
+
+Gửi 1 file đính kèm (ảnh/video/file).
+
+```go
+err := client.SendMedia(ctx, threadID, imageBytes, "photo.jpg", "image/jpeg")
+```
+
+---
+
+#### `SendMultiMedia(ctx, threadID, items) error`
+
+Gửi nhiều file trong 1 tin nhắn. Upload song song (concurrency 3).
+
+```go
+err := client.SendMultiMedia(ctx, threadID, []core.MediaAttachment{
+    {Data: img1, Filename: "a.jpg", MimeType: "image/jpeg"},
+    {Data: img2, Filename: "b.png", MimeType: "image/png"},
+})
+```
+
+---
+
+#### `SendMediaRich(ctx, req) (*MessageRecord, error)`
+
+Gửi media đầy đủ (giống `SendText` nhưng cho media), hỗ trợ reply.
+
+```go
+rec, err := client.SendMediaRich(ctx, core.SendMediaRequest{
+    ThreadID: threadID,
+    Items:    items,
+    ReplyTo:  &core.ReplyTarget{MessageID: "mid.xxx"},
+})
+```
+
+- **Upload:** Parallel (max 3 goroutine), retry 3 lần/file
+- **Max size:** 25 MB / file
+- **Endpoint:** `POST /ajax/mercury/upload.php`
+
+---
+
+### 18.2 Reply & Edit & Recall
+
+#### `EditText(ctx, messageID, newText) (*MessageRecord, error)`
+
+Chỉnh sửa tin nhắn đã gửi.
+
+```go
+rec, err := client.EditText(ctx, "mid.xxx", "Nội dung mới")
+```
+
+- **Giao thức:** MQTT `EditMessageTask`
+- **Xác nhận:** WebSocket event hoặc EditTracker (timeout 5s)
+
+---
+
+#### `Recall(ctx, messageID) error`
+
+Thu hồi (xoá) tin nhắn.
+
+```go
+err := client.Recall(ctx, "mid.xxx")
+```
+
+- **Giao thức:** MQTT `DeleteMessageTask`
+
+---
+
+### 18.3 Reactions
+
+#### `SendReaction(ctx, threadID, messageID, reaction) error`
+
+Thả reaction emoji lên tin nhắn. Gửi emoji rỗng `""` để xoá reaction.
+
+```go
+// Thả reaction
+err := client.SendReaction(ctx, threadID, "mid.xxx", "❤️")
+
+// Xoá reaction
+err := client.SendReaction(ctx, threadID, "mid.xxx", "")
+```
+
+| Param | Kiểu | Mô tả |
+|-------|------|-------|
+| `threadID` | `int64` | ID thread |
+| `messageID` | `string` | ID tin nhắn mục tiêu |
+| `reaction` | `string` | Unicode emoji (VD: `"😂"`, `"❤️"`, `"👍"`) |
+
+- **Giao thức:** MQTT `SendReactionTask` (label 29)
+
+---
+
+### 18.4 Forward & Share
+
+#### `ForwardMessage(ctx, threadID, forwardedMsgID) error`
+
+Chuyển tiếp tin nhắn sang thread khác.
+
+```go
+err := client.ForwardMessage(ctx, targetThreadID, "mid.xxx")
+```
+
+- **Giao thức:** MQTT `SendMessageTask` (SendType=5)
+
+---
+
+#### `ShareContact(ctx, threadID, contactID, text) error`
+
+Chia sẻ thẻ liên hệ (contact card) vào thread.
+
+```go
+err := client.ShareContact(ctx, threadID, 100001234567890, "Check out this person!")
+```
+
+| Param | Kiểu | Mô tả |
+|-------|------|-------|
+| `contactID` | `int64` | Facebook user ID của contact |
+| `text` | `string` | Tin nhắn kèm theo |
+
+- **Giao thức:** MQTT `ShareContactTask` (label 359)
+
+---
+
+### 18.5 Thread quản lý
+
+#### `SetThreadImage(ctx, threadID, imageData, filename, mimeType) error`
+
+Đặt ảnh đại diện cho nhóm chat.
+
+```go
+err := client.SetThreadImage(ctx, groupID, imgBytes, "avatar.jpg", "image/jpeg")
+```
+
+- Upload ảnh trước → lấy `imageID` → gửi `SetThreadImageTask`
+- **Giao thức:** MQTT `SetThreadImageTask`
+
+---
+
+#### `CreatePoll(ctx, threadID, question, options) error`
+
+Tạo bình chọn trong nhóm.
+
+```go
+err := client.CreatePoll(ctx, threadID, "Ăn gì hôm nay?", []string{
+    "Phở", "Bún bò", "Cơm tấm",
+})
+```
+
+- **Giao thức:** MQTT `CreatePollTask`
+
+---
+
+#### `RenameThread(ctx, threadID, name) error`
+
+Đổi tên nhóm chat.
+
+```go
+err := client.RenameThread(ctx, groupID, "Hội bạn thân 💕")
+```
+
+- **Giao thức:** MQTT `RenameThreadTask`
+
+---
+
+#### `MuteThread(ctx, threadID, muteExpireMs) error`
+
+Tắt thông báo cho thread. Đặt `0` để bật lại.
+
+```go
+// Tắt 1 giờ
+err := client.MuteThread(ctx, threadID, time.Now().Add(time.Hour).UnixMilli())
+
+// Bật lại thông báo
+err := client.MuteThread(ctx, threadID, 0)
+```
+
+- **Giao thức:** MQTT `MuteThreadTask`
+
+---
+
+#### `DeleteThread(ctx, threadID) error`
+
+Xoá thread (chỉ ẩn khỏi danh sách, không xoá phía người khác).
+
+```go
+err := client.DeleteThread(ctx, threadID)
+```
+
+- **Giao thức:** MQTT `DeleteThreadTask`
+
+---
+
+#### `MarkThreadRead(ctx, threadID) error`
+
+Đánh dấu thread đã đọc (tự động dùng timestamp hiện tại).
+
+```go
+err := client.MarkThreadRead(ctx, threadID)
+```
+
+- **Giao thức:** MQTT `ThreadMarkReadTask`
+
+---
+
+### 18.6 Thành viên nhóm
+
+#### `AddParticipants(ctx, threadID, contactIDs) error`
+
+Thêm thành viên vào nhóm.
+
+```go
+err := client.AddParticipants(ctx, groupID, []int64{100001111, 100002222})
+```
+
+- **Giao thức:** MQTT `AddParticipantsTask`
+
+---
+
+#### `RemoveParticipant(ctx, threadID, contactID) error`
+
+Xoá thành viên khỏi nhóm (cần quyền admin).
+
+```go
+err := client.RemoveParticipant(ctx, groupID, 100001111)
+```
+
+- **Giao thức:** MQTT `RemoveParticipantTask`
+
+---
+
+#### `UpdateAdmin(ctx, threadID, contactID, isAdmin) error`
+
+Thăng/giáng admin. `isAdmin=1` thăng, `isAdmin=0` giáng.
+
+```go
+// Thăng admin
+err := client.UpdateAdmin(ctx, groupID, 100001111, 1)
+
+// Giáng admin
+err := client.UpdateAdmin(ctx, groupID, 100001111, 0)
+```
+
+- **Giao thức:** MQTT `UpdateAdminTask`
+
+---
+
+### 18.7 Tuỳ chỉnh thread
+
+#### `ChangeNickname(ctx, threadID, contactID, nickname) error`
+
+Đổi biệt danh (nickname) cho thành viên trong thread.
+
+```go
+err := client.ChangeNickname(ctx, threadID, 100001234567890, "Boss 🎯")
+```
+
+| Param | Kiểu | Mô tả |
+|-------|------|-------|
+| `threadID` | `int64` | ID thread |
+| `contactID` | `int64` | Facebook user ID muốn đổi nickname |
+| `nickname` | `string` | Biệt danh mới (rỗng `""` để xoá) |
+
+- **Giao thức:** MQTT `ChangeNicknameTask` (label 44)
+- **Queue:** `thread_participant_nickname`
+- **JS FCA tương đương:** `changeNickname.js`
+
+---
+
+#### `ChangeThreadColor(ctx, threadID, themeFBID) error`
+
+Đổi màu/theme cho thread.
+
+```go
+err := client.ChangeThreadColor(ctx, threadID, "3259963564026462")
+```
+
+| Param | Kiểu | Mô tả |
+|-------|------|-------|
+| `themeFBID` | `string` | Facebook Theme ID (VD: `"3259963564026462"` = Love) |
+
+- **Giao thức:** MQTT `ChangeThreadColorTask` (label 43)
+- **Queue:** `thread_theme`
+- **JS FCA tương đương:** `changeThreadColor.js`
+
+**Một số Theme ID phổ biến:**
+
+| Theme | FBID |
+|-------|------|
+| Mặc định (Messenger Blue) | `196241301102133` |
+| Love | `3259963564026462` |
+| Tie-Dye | `339021464972092` |
+| Berry | `184305556956786` |
+
+---
+
+#### `ChangeThreadEmoji(ctx, threadID, emoji) error`
+
+Đổi emoji nhanh (quick reaction) mặc định cho thread.
+
+```go
+err := client.ChangeThreadEmoji(ctx, threadID, "🔥")
+```
+
+| Param | Kiểu | Mô tả |
+|-------|------|-------|
+| `emoji` | `string` | Unicode emoji mới (VD: `"🔥"`, `"❤️"`) |
+
+- **Giao thức:** MQTT `ChangeThreadEmojiTask` (label 100003)
+- **Queue:** `thread_quick_reaction`
+- **JS FCA tương đương:** `changeThreadEmoji.js`
+
+---
+
+### 18.8 Typing indicator
+
+#### `SendTypingIndicator(ctx, threadID, isTyping, isGroup) error`
+
+Gửi/tắt trạng thái "đang nhập" (typing bubble).
+
+```go
+// Bật typing
+err := client.SendTypingIndicator(ctx, threadID, true, false)
+
+// Tắt typing
+err := client.SendTypingIndicator(ctx, threadID, false, false)
+
+// Group thread
+err := client.SendTypingIndicator(ctx, groupID, true, true)
+```
+
+| Param | Kiểu | Mô tả |
+|-------|------|-------|
+| `isTyping` | `bool` | `true` = đang gõ, `false` = dừng |
+| `isGroup` | `bool` | `true` nếu là nhóm |
+
+- **Giao thức:** MQTT `TypingIndicatorTask` (label 3) — **stateless** (type 4)
+- **Queue:** `nil` (không dùng queue, gửi thẳng)
+- **JS FCA tương đương:** `sendTypingIndicator.js`
+
+---
+
+### 18.9 Archive & Block
+
+#### `ChangeArchivedStatus(ctx, threadIDs, archive) error`
+
+Lưu trữ hoặc bỏ lưu trữ thread.
+
+```go
+// Archive
+err := client.ChangeArchivedStatus(ctx, []int64{threadID1, threadID2}, true)
+
+// Unarchive
+err := client.ChangeArchivedStatus(ctx, []int64{threadID1}, false)
+```
+
+- **Endpoint:** `POST /ajax/mercury/change_archived_status.php`
+- **Yêu cầu:** Facebook only
+
+---
+
+#### `ChangeBlockedStatus(ctx, userID, block) error`
+
+Chặn hoặc bỏ chặn tin nhắn từ một user.
+
+```go
+// Block
+err := client.ChangeBlockedStatus(ctx, 100001234567890, true)
+
+// Unblock
+err := client.ChangeBlockedStatus(ctx, 100001234567890, false)
+```
+
+- **Endpoint:** `POST /messaging/block_messages/` hoặc `/messaging/unblock_messages/`
+- **Yêu cầu:** Facebook only
+
+---
+
+### 18.10 Delivery & Seen
+
+#### `MarkAsDelivered(ctx, threadID, messageID) error`
+
+Gửi xác nhận đã nhận (delivery receipt) cho tin nhắn.
+
+```go
+err := client.MarkAsDelivered(ctx, threadID, "mid.xxx")
+```
+
+- **Endpoint:** `POST /ajax/mercury/delivery_receipts.php`
+
+---
+
+#### `MarkAsSeen(ctx, timestampMs) error`
+
+Đánh dấu tất cả tin nhắn đã xem tới thời điểm chỉ định.
+
+```go
+err := client.MarkAsSeen(ctx, time.Now().UnixMilli())
+```
+
+- **Endpoint:** `POST /ajax/mercury/mark_seen.php`
+
+---
+
+#### `MarkAllRead(ctx) error`
+
+Đánh dấu tất cả inbox đã đọc.
+
+```go
+err := client.MarkAllRead(ctx)
+```
+
+- **Endpoint:** `POST /ajax/mercury/mark_folder_as_read.php`
+
+---
+
+### 18.11 Message Request
+
+#### `HandleMessageRequest(ctx, threadID, accept) error`
+
+Chấp nhận hoặc từ chối yêu cầu nhắn tin.
+
+```go
+// Chấp nhận
+err := client.HandleMessageRequest(ctx, threadID, true)
+
+// Từ chối
+err := client.HandleMessageRequest(ctx, threadID, false)
+```
+
+- **Endpoint:** `POST /messaging/accept` hoặc `/messaging/reject`
+- **Yêu cầu:** Facebook only
+
+---
+
+### 18.12 Tìm kiếm & Ảnh
+
+#### `SearchForThread(ctx, queryStr) ([]byte, error)`
+
+Tìm kiếm thread theo tên. Trả về JSON thô.
+
+```go
+result, err := client.SearchForThread(ctx, "Hội bạn thân")
+// result là JSON chứa danh sách threads phù hợp
+```
+
+- **Endpoint:** `POST /ajax/mercury/search_threads.php`
+- **Params:** `client=web_messenger`, `limit=21`
+
+---
+
+#### `GetThreadPictures(ctx, threadID, offset, limit) ([]byte, error)`
+
+Lấy danh sách ảnh đã chia sẻ trong thread.
+
+```go
+pics, err := client.GetThreadPictures(ctx, threadID, 0, 30)
+```
+
+| Param | Kiểu | Mô tả |
+|-------|------|-------|
+| `offset` | `int` | Vị trí bắt đầu (phân trang) |
+| `limit` | `int` | Số lượng ảnh tối đa |
+
+- **Endpoint:** `POST /ajax/messaging/attachments/sharedphotos.php`
+
+---
+
+#### `ResolvePhotoURL(ctx, photoID) (string, error)`
+
+Lấy URL ảnh gốc (full-size) từ photo ID.
+
+```go
+url, err := client.ResolvePhotoURL(ctx, "1234567890")
+// url = "https://scontent.fbkk1-1.fna.fbcdn.net/v/..."
+```
+
+- **Endpoint:** GraphQL relay query
+
+---
+
+### 18.13 GraphQL — User Info
+
+#### `GetUserInfo(ctx, userIDs) ([]byte, error)`
+
+Lấy thông tin chi tiết nhiều user cùng lúc.
+
+```go
+info, err := client.GetUserInfo(ctx, []int64{100001111, 100002222})
+```
+
+- **GraphQL doc_id:** `5009315269112105`
+- **Friendly name:** `MessengerParticipantsFetcher`
+- **Response:** JSON chứa name, profile picture, gender, v.v.
+
+---
+
+#### `GetUserInfoV2(ctx, userID) ([]byte, error)`
+
+Lấy thông tin user qua CometHovercard (chi tiết hơn, 1 user/lần).
+
+```go
+info, err := client.GetUserInfoV2(ctx, 100001234567890)
+```
+
+- **GraphQL doc_id:** `24418640587785718`
+- **Friendly name:** `CometHovercardQueryRendererQuery`
+- **Response:** JSON chứa name, work, education, mutual friends, v.v.
+
+---
+
+### 18.14 GraphQL — Themes
+
+#### `CreateThemeAI(ctx, prompt) ([]byte, error)`
+
+Tạo theme chat bằng AI từ mô tả văn bản.
+
+```go
+theme, err := client.CreateThemeAI(ctx, "sunset over the ocean with warm colors")
+```
+
+- **GraphQL doc_id:** `23873748445608673`
+- **Friendly name:** `useGenerateAIThemeMutation`
+- **Response:** JSON chứa theme ID và preview URL
+
+---
+
+#### `GetThemePictures(ctx, themeID) ([]byte, error)`
+
+Lấy ảnh/assets của một theme.
+
+```go
+pics, err := client.GetThemePictures(ctx, "3259963564026462")
+```
+
+- **GraphQL doc_id:** `9734829906576883`
+- **Friendly name:** `MWPThreadThemeProviderQuery`
+
+---
+
+### 18.15 GraphQL — Post Reaction
+
+#### `SetPostReaction(ctx, postID, reactionType) ([]byte, error)`
+
+Thả reaction lên bài viết Facebook (không phải tin nhắn).
+
+```go
+// Like
+result, err := client.SetPostReaction(ctx, "pfbid02abc...", 1)
+
+// Heart
+result, err := client.SetPostReaction(ctx, "pfbid02abc...", 2)
+
+// Remove (unlike)
+result, err := client.SetPostReaction(ctx, "pfbid02abc...", 0)
+```
+
+**Bảng reaction types:**
+
+| Type | Emoji | Mô tả |
+|------|-------|-------|
+| `0` | — | Unlike (bỏ reaction) |
+| `1` | 👍 | Like |
+| `2` | ❤️ | Heart |
+| `16` | 🥰 | Love |
+| `4` | 😂 | Haha |
+| `3` | 😮 | Wow |
+| `7` | 😢 | Sad |
+| `8` | 😡 | Angry |
+
+- **GraphQL doc_id:** `4769042373179384`
+- **Friendly name:** `CometUFIFeedbackReactMutation`
+
+---
+
+### 18.16 Bạn bè / Social
+
+#### `HandleFriendRequest(ctx, userID, accept) error`
+
+Chấp nhận hoặc từ chối lời mời kết bạn.
+
+```go
+// Chấp nhận
+err := client.HandleFriendRequest(ctx, 100001234567890, true)
+
+// Từ chối
+err := client.HandleFriendRequest(ctx, 100001234567890, false)
+```
+
+- **Endpoint:** `POST /requests/friends/ajax/`
+- **Params:** `action=confirm` hoặc `action=reject`
+
+---
+
+#### `Unfriend(ctx, userID) error`
+
+Huỷ kết bạn.
+
+```go
+err := client.Unfriend(ctx, 100001234567890)
+```
+
+- **Endpoint:** `POST /ajax/profile/removefriendconfirm.php`
+
+---
+
+### 18.17 Token & Kết nối
+
+#### `RefreshTokens(ctx) error`
+
+Làm mới `fb_dtsg`, `LSD`, `jazoest` bằng cách re-fetch trang Facebook.
+
+```go
+err := client.RefreshTokens(ctx)
+```
+
+- Nên gọi định kỳ (khuyến nghị 24h) để upload không bị lỗi token hết hạn.
+
+---
+
+#### `StartTokenRefreshLoop(ctx, interval)`
+
+Chạy goroutine nền tự động refresh token theo chu kỳ.
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+client.StartTokenRefreshLoop(ctx, 24*time.Hour)
+```
+
+- **Tự động:** Retry mỗi `interval` nếu lần trước lỗi
+- **Dừng:** Cancel context để dừng goroutine
+
+---
+
+### 18.18 Broadcast & Scheduler
+
+> Package: `mybot/internal/messaging`
+
+#### `Broadcast(ctx, sender, threadIDs, text, delay) []BroadcastResult`
+
+Gửi cùng một tin nhắn tới nhiều thread, có delay chống rate-limit.
+
+```go
+results := messaging.Broadcast(ctx, client, []int64{
+    100001111, 100002222, 100003333,
+}, "Thông báo: Bot sẽ bảo trì lúc 22h!", time.Second)
+
+fmt.Println(messaging.BroadcastSummary(results))
+// → "Broadcast: 3/3 thành công, 0 thất bại"
+```
+
+| Param | Kiểu | Mô tả |
+|-------|------|-------|
+| `sender` | `core.MessageSender` | Bất kỳ object nào implement `SendMessage` |
+| `threadIDs` | `[]int64` | Danh sách thread cần gửi |
+| `text` | `string` | Nội dung tin nhắn |
+| `delay` | `time.Duration` | Delay giữa các lần gửi (mặc định 1s nếu ≤ 0) |
+
+- **Return:** `[]BroadcastResult` — mỗi phần tử chứa `ThreadID`, `OK`, `Err`
+
+---
+
+#### `Scheduler` — Hẹn giờ gửi tin nhắn
+
+```go
+sched := messaging.NewScheduler(client)
+
+// Hẹn gửi sau 30 phút
+id, err := sched.Schedule(ctx, threadID, "Nhắc nhở: Họp lúc 3h!", 
+    time.Now().Add(30*time.Minute))
+
+// Xem danh sách pending
+pending := sched.List()
+
+// Huỷ
+sched.Cancel(id)
+
+// Huỷ tất cả
+n := sched.CancelAll()
+```
+
+**Các method:**
+
+| Method | Signature | Mô tả |
+|--------|-----------|-------|
+| `NewScheduler` | `(sender) *Scheduler` | Tạo scheduler mới |
+| `Schedule` | `(ctx, threadID, text, sendAt) (string, error)` | Hẹn gửi, trả về ID |
+| `Cancel` | `(id) bool` | Huỷ 1 tin hẹn, trả `true` nếu tìm thấy |
+| `List` | `() []ScheduledMessage` | Danh sách tin đang chờ |
+| `CancelAll` | `() int` | Huỷ tất cả, trả số lượng đã huỷ |
+
+---
+
+### 18.19 Tổng hợp giao thức
+
+| Giao thức | Số API | Mô tả |
+|-----------|--------|-------|
+| **MQTT Tasks** | 20 | Gửi qua WebSocket `/ls_req`, phản hồi `/ls_resp` |
+| **HTTP POST** | 10 | Gọi trực tiếp endpoint Facebook AJAX |
+| **GraphQL** | 6 | POST tới `/api/graphql/` với `doc_id` |
+| **Internal** | 2 | Token refresh, không gọi API trực tiếp |
+| **Utility** | 2 | Broadcast, Scheduler — logic wrapper |
+| **Tổng** | **40** | |
+
+### 18.20 Bảng label MQTT đầy đủ
+
+| Task | Label | Queue | Type |
+|------|-------|-------|------|
+| `SendMessageTask` | 46 | `["messages", threadID]` | 3 (stateful) |
+| `EditMessageTask` | 191 | `edit_message` | 3 |
+| `DeleteMessageTask` | 33 | `unsend_message` | 3 |
+| `DeleteMessageMeOnlyTask` | 75 | `155` | 3 |
+| `SendReactionTask` | 29 | `["reaction", msgID]` | 3 |
+| `SendReactionV2Task` | 580 | `["reaction_v2", msgID]` | 3 |
+| `FetchReactionsV2UserList` | 581 | `fetch_reactions_v2_details_users_list` | 3 |
+| `ShareContactTask` | 359 | `messenger_contact_sharing` | 3 |
+| `SetThreadImageTask` | — | — | 3 |
+| `CreatePollTask` | — | — | 3 |
+| `RenameThreadTask` | — | — | 3 |
+| `MuteThreadTask` | — | — | 3 |
+| `AddParticipantsTask` | — | — | 3 |
+| `RemoveParticipantTask` | — | — | 3 |
+| `UpdateAdminTask` | — | — | 3 |
+| `ThreadMarkReadTask` | — | — | 3 |
+| `DeleteThreadTask` | — | — | 3 |
+| `ChangeNicknameTask` | 44 | `thread_participant_nickname` | 3 |
+| `ChangeThreadColorTask` | 43 | `thread_theme` | 3 |
+| `ChangeThreadEmojiTask` | 100003 | `thread_quick_reaction` | 3 |
+| `TypingIndicatorTask` | 3 | `nil` (stateless) | **4** |

@@ -207,6 +207,29 @@ func (c *Client) GetPlatform() types.Platform {
 	return c.Platform
 }
 
+// RefreshConfigs re-fetches the messages page and re-parses fb_dtsg,
+// jazoest, LSD token and other session tokens.  This is equivalent to
+// the JS FCA's refreshFb_dtsg() which periodically refreshes the DTSG
+// token every 24 hours to keep uploads and GraphQL calls working.
+func (c *Client) RefreshConfigs(ctx context.Context) error {
+	if c == nil {
+		return ErrClientIsNil
+	}
+	moduleLoader := &ModuleParser{client: c, LS: &table.LSTable{}}
+	err := moduleLoader.Load(ctx, c.GetEndpoint("messages"))
+	if err != nil {
+		return fmt.Errorf("refresh configs: failed to load page: %w", err)
+	}
+
+	// The Load() call above already updated BrowserConfigTable with fresh
+	// DTSGInitData.Token, LSD.Token, and Jazoest (via __eqmc).
+	// We just need to propagate these into the configs shortcuts.
+	c.configs.LSDToken = c.configs.BrowserConfigTable.LSD.Token
+	c.configs.Bitmap, c.configs.CSRBitmap = c.configs.LoadBitmaps()
+	c.Logger.Info().Msg("Refreshed fb_dtsg, LSD, and jazoest tokens")
+	return nil
+}
+
 func (c *Client) configurePlatformClient() {
 	var selectedEndpoints map[string]string
 	switch c.Platform {

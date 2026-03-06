@@ -3,6 +3,7 @@ package facebook
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix"
@@ -232,63 +233,102 @@ func (c *Client) Recall(ctx context.Context, messageID string) error {
 }
 
 func (c *Client) uploadAttachmentIDs(ctx context.Context, threadID int64, items []core.MediaAttachment) ([]int64, error) {
-	ids := make([]int64, 0, len(items))
+	// For a single file, upload directly (no goroutine overhead).
+	if len(items) == 1 {
+		return c.uploadSingleAttachment(ctx, threadID, &items[0])
+	}
+
+	// Parallel upload with concurrency limit (inspired by JS FCA pLimit).
+	const maxConcurrency = 3
+
+	type uploadResult struct {
+		idx  int
+		fbID int64
+		err  error
+	}
+
+	results := make([]uploadResult, len(items))
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
 
 	for idx := range items {
-		item := &items[idx] // pointer so Cleanup mutates the original
+		item := &items[idx]
 
 		if item.DataSize() > int64(maxUploadSize) {
-			if len(items) == 1 {
-				return nil, fmt.Errorf("file too large (%d bytes, max %d)", item.DataSize(), maxUploadSize)
-			}
+			// Fail fast — clean up items that haven't started yet.
 			return nil, fmt.Errorf("file #%d too large (%d bytes, max %d)", idx+1, item.DataSize(), maxUploadSize)
 		}
 
-		var lastErr error
-		for retry := 0; retry < maxRetries; retry++ {
-			// Open a streaming reader each attempt — avoids holding the full
-			// file in RAM.  For file-backed attachments this streams from disk
-			// directly into the multipart body (~32KB peak).
-			reader, err := item.OpenReader()
+		wg.Add(1)
+		go func(i int, it *core.MediaAttachment) {
+			defer wg.Done()
+			sem <- struct{}{}        // acquire
+			defer func() { <-sem }() // release
+
+			ids, err := c.uploadSingleAttachment(ctx, threadID, it)
 			if err != nil {
-				return nil, fmt.Errorf("failed to open media #%d: %w", idx+1, err)
+				results[i] = uploadResult{idx: i, err: err}
+			} else if len(ids) > 0 {
+				results[i] = uploadResult{idx: i, fbID: ids[0]}
+			} else {
+				results[i] = uploadResult{idx: i, err: fmt.Errorf("upload returned no ID")}
 			}
-
-			uploadResp, err := c.client.SendMercuryUploadRequest(ctx, threadID, &messagix.MercuryUploadMedia{
-				Filename:    item.Filename,
-				MimeType:    item.MimeType,
-				MediaReader: reader,
-			})
-			reader.Close()
-
-			if err != nil {
-				lastErr = fmt.Errorf("upload failed: %w", err)
-				continue
-			}
-
-			var realFBID int64
-			if uploadResp.Payload.RealMetadata != nil {
-				realFBID = uploadResp.Payload.RealMetadata.GetFbId()
-			}
-			if realFBID == 0 {
-				lastErr = fmt.Errorf("failed to get media ID from upload response")
-				continue
-			}
-
-			ids = append(ids, realFBID)
-			lastErr = nil
-			break
-		}
-
-		// Release temp file immediately after this item is uploaded.
-		item.Cleanup()
-
-		if lastErr != nil {
-			return nil, lastErr
-		}
+		}(idx, item)
 	}
 
+	wg.Wait()
+
+	// Collect results in order; fail on first error.
+	ids := make([]int64, 0, len(items))
+	for _, r := range results {
+		if r.err != nil {
+			return nil, fmt.Errorf("upload #%d failed: %w", r.idx+1, r.err)
+		}
+		ids = append(ids, r.fbID)
+	}
 	return ids, nil
+}
+
+// uploadSingleAttachment uploads one media item with retries and returns its FB ID.
+func (c *Client) uploadSingleAttachment(ctx context.Context, threadID int64, item *core.MediaAttachment) ([]int64, error) {
+	if item.DataSize() > int64(maxUploadSize) {
+		return nil, fmt.Errorf("file too large (%d bytes, max %d)", item.DataSize(), maxUploadSize)
+	}
+
+	var lastErr error
+	for retry := 0; retry < maxRetries; retry++ {
+		reader, err := item.OpenReader()
+		if err != nil {
+			return nil, fmt.Errorf("failed to open media: %w", err)
+		}
+
+		uploadResp, err := c.client.SendMercuryUploadRequest(ctx, threadID, &messagix.MercuryUploadMedia{
+			Filename:    item.Filename,
+			MimeType:    item.MimeType,
+			MediaReader: reader,
+		})
+		reader.Close()
+
+		if err != nil {
+			lastErr = fmt.Errorf("upload failed: %w", err)
+			continue
+		}
+
+		var realFBID int64
+		if uploadResp.Payload.RealMetadata != nil {
+			realFBID = uploadResp.Payload.RealMetadata.GetFbId()
+		}
+		if realFBID == 0 {
+			lastErr = fmt.Errorf("failed to get media ID from upload response")
+			continue
+		}
+
+		item.Cleanup()
+		return []int64{realFBID}, nil
+	}
+
+	item.Cleanup()
+	return nil, lastErr
 }
 
 func messageRecordFromSendResponse(resp *table.LSTable, threadID, senderID int64) *core.MessageRecord {
@@ -370,4 +410,384 @@ func firstNonZero(values ...int64) int64 {
 		}
 	}
 	return 0
+}
+
+// ---------------------------------------------------------------------------
+// Additional transport actions (ported from JS FCA analysis)
+// ---------------------------------------------------------------------------
+
+// ForwardMessage forwards an existing message to another thread.
+func (c *Client) ForwardMessage(ctx context.Context, threadID int64, forwardedMsgID string) error {
+	otid := methods.GenerateEpochID()
+	task := &socket.SendMessageTask{
+		ThreadId:                 threadID,
+		Otid:                     otid,
+		Source:                   65544,
+		SendType:                 5, // forward
+		SyncGroup:                1,
+		ForwardedMsgId:           forwardedMsgID,
+		StripForwardedMsgCaption: 0,
+		InitiatingSource:         1,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// SendReaction sets a reaction emoji on a message.
+func (c *Client) SendReaction(ctx context.Context, threadID int64, messageID string, reaction string) error {
+	task := &socket.SendReactionTask{
+		ThreadKey:       threadID,
+		MessageID:       messageID,
+		ActorID:         c.selfID,
+		Reaction:        reaction,
+		SyncGroup:       1,
+		SendAttribution: table.MESSENGER_INBOX_IN_THREAD,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// ShareContact shares a contact card in a thread (label 359).
+func (c *Client) ShareContact(ctx context.Context, threadID int64, contactID int64, text string) error {
+	task := &socket.ShareContactTask{
+		ContactID: contactID,
+		SyncGroup: 1,
+		Text:      text,
+		ThreadID:  threadID,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// SetThreadImage uploads an image and sets it as the group thread image.
+func (c *Client) SetThreadImage(ctx context.Context, threadID int64, imageData []byte, filename, mimeType string) error {
+	// Upload the image first.
+	uploadResp, err := c.client.SendMercuryUploadRequest(ctx, threadID, &messagix.MercuryUploadMedia{
+		Filename:  filename,
+		MimeType:  mimeType,
+		MediaData: imageData,
+	})
+	if err != nil {
+		return fmt.Errorf("upload thread image: %w", err)
+	}
+	var imageID int64
+	if uploadResp.Payload.RealMetadata != nil {
+		imageID = uploadResp.Payload.RealMetadata.GetFbId()
+	}
+	if imageID == 0 {
+		return fmt.Errorf("upload thread image: no image ID returned")
+	}
+
+	task := &socket.SetThreadImageTask{
+		ThreadKey: threadID,
+		ImageID:   imageID,
+		SyncGroup: 1,
+	}
+	_, err = c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// CreatePoll creates a poll in a thread.
+func (c *Client) CreatePoll(ctx context.Context, threadID int64, question string, options []string) error {
+	task := &socket.CreatePollTask{
+		QuestionText: question,
+		ThreadKey:    threadID,
+		Options:      options,
+		SyncGroup:    1,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// RenameThread renames a group thread.
+func (c *Client) RenameThread(ctx context.Context, threadID int64, name string) error {
+	task := &socket.RenameThreadTask{
+		ThreadKey:  threadID,
+		ThreadName: name,
+		SyncGroup:  1,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// MuteThread mutes a thread until the given expiry time (0 = unmute).
+func (c *Client) MuteThread(ctx context.Context, threadID int64, muteExpireMs int64) error {
+	task := &socket.MuteThreadTask{
+		ThreadKey:        threadID,
+		MuteExpireTimeMS: muteExpireMs,
+		SyncGroup:        1,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// AddParticipants adds users to a group thread.
+func (c *Client) AddParticipants(ctx context.Context, threadID int64, contactIDs []int64) error {
+	task := &socket.AddParticipantsTask{
+		ThreadKey:  threadID,
+		ContactIDs: contactIDs,
+		SyncGroup:  1,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// RemoveParticipant removes a user from a group thread.
+func (c *Client) RemoveParticipant(ctx context.Context, threadID int64, contactID int64) error {
+	task := &socket.RemoveParticipantTask{
+		ThreadID:  threadID,
+		ContactID: contactID,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// UpdateAdmin promotes or demotes a user to/from admin (isAdmin: 1=promote, 0=demote).
+func (c *Client) UpdateAdmin(ctx context.Context, threadID int64, contactID int64, isAdmin int) error {
+	task := &socket.UpdateAdminTask{
+		ThreadKey: threadID,
+		ContactID: contactID,
+		IsAdmin:   isAdmin,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// MarkThreadRead marks a thread as read.
+func (c *Client) MarkThreadRead(ctx context.Context, threadID int64) error {
+	task := &socket.ThreadMarkReadTask{
+		ThreadId:            threadID,
+		LastReadWatermarkTs: time.Now().UnixMilli(),
+		SyncGroup:           1,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// DeleteThread deletes a thread.
+func (c *Client) DeleteThread(ctx context.Context, threadID int64) error {
+	task := &socket.DeleteThreadTask{
+		ThreadKey:  threadID,
+		RemoveType: 0,
+		SyncGroup:  1,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// HandleMessageRequest accepts or rejects a message request (Facebook only).
+func (c *Client) HandleMessageRequest(ctx context.Context, threadID int64, accept bool) error {
+	if c.client.Facebook == nil {
+		return fmt.Errorf("HandleMessageRequest: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.HandleMessageRequest(ctx, threadID, accept)
+}
+
+// MarkAllRead marks all inbox threads as read (Facebook only).
+func (c *Client) MarkAllRead(ctx context.Context) error {
+	if c.client.Facebook == nil {
+		return fmt.Errorf("MarkAllRead: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.MarkAllRead(ctx)
+}
+
+// ResolvePhotoURL resolves the full-size URL of a photo attachment (Facebook only).
+func (c *Client) ResolvePhotoURL(ctx context.Context, photoID string) (string, error) {
+	if c.client.Facebook == nil {
+		return "", fmt.Errorf("ResolvePhotoURL: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.ResolvePhotoURL(ctx, photoID)
+}
+
+// RefreshTokens refreshes fb_dtsg, LSD, and jazoest tokens by re-fetching the page.
+// Should be called periodically (e.g. every 24h) to keep uploads working.
+func (c *Client) RefreshTokens(ctx context.Context) error {
+	return c.client.RefreshConfigs(ctx)
+}
+
+// StartTokenRefreshLoop starts a background goroutine that refreshes
+// tokens every interval (recommended: 24h). Cancel the context to stop.
+func (c *Client) StartTokenRefreshLoop(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := c.RefreshTokens(ctx); err != nil {
+					// Log but don't stop – next tick will retry.
+					_ = err // caller should set up logging externally
+				}
+			}
+		}
+	}()
+}
+
+// ---------------------------------------------------------------------------
+// New messaging + social APIs (ported from JS FCA)
+// ---------------------------------------------------------------------------
+
+// ChangeNickname changes a participant's nickname in a thread.
+func (c *Client) ChangeNickname(ctx context.Context, threadID, contactID int64, nickname string) error {
+	task := &socket.ChangeNicknameTask{
+		ThreadKey: threadID,
+		ContactID: contactID,
+		Nickname:  nickname,
+		SyncGroup: 1,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// ChangeThreadColor changes a thread's color/theme by theme FBID.
+func (c *Client) ChangeThreadColor(ctx context.Context, threadID int64, themeFBID string) error {
+	task := &socket.ChangeThreadColorTask{
+		ThreadKey: threadID,
+		ThemeFBID: themeFBID,
+		SyncGroup: 1,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// ChangeThreadEmoji changes the default quick-reaction emoji for a thread.
+func (c *Client) ChangeThreadEmoji(ctx context.Context, threadID int64, emoji string) error {
+	task := &socket.ChangeThreadEmojiTask{
+		ThreadKey:   threadID,
+		CustomEmoji: emoji,
+		SyncGroup:   1,
+	}
+	_, err := c.client.ExecuteTask(ctx, task)
+	return err
+}
+
+// SendTypingIndicator sends or stops a typing indicator to a thread.
+// isGroup should be true for group threads.
+func (c *Client) SendTypingIndicator(ctx context.Context, threadID int64, isTyping, isGroup bool) error {
+	isTypingInt := 0
+	if isTyping {
+		isTypingInt = 1
+	}
+	isGroupInt := 0
+	threadType := 1
+	if isGroup {
+		isGroupInt = 1
+		threadType = 2
+	}
+	task := &socket.TypingIndicatorTask{
+		ThreadKey:     threadID,
+		IsGroupThread: isGroupInt,
+		IsTyping:      isTypingInt,
+		Attribution:   0,
+		SyncGroup:     1,
+		ThreadType:    threadType,
+	}
+	return c.client.ExecuteStatelessTask(ctx, task)
+}
+
+// ChangeArchivedStatus archives or unarchives threads (Facebook only).
+func (c *Client) ChangeArchivedStatus(ctx context.Context, threadIDs []int64, archive bool) error {
+	if c.client.Facebook == nil {
+		return fmt.Errorf("ChangeArchivedStatus: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.ChangeArchivedStatus(ctx, threadIDs, archive)
+}
+
+// ChangeBlockedStatus blocks or unblocks a user's messages (Facebook only).
+func (c *Client) ChangeBlockedStatus(ctx context.Context, userID int64, block bool) error {
+	if c.client.Facebook == nil {
+		return fmt.Errorf("ChangeBlockedStatus: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.ChangeBlockedStatus(ctx, userID, block)
+}
+
+// MarkAsDelivered sends a delivery receipt for a message (Facebook only).
+func (c *Client) MarkAsDelivered(ctx context.Context, threadID int64, messageID string) error {
+	if c.client.Facebook == nil {
+		return fmt.Errorf("MarkAsDelivered: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.MarkAsDelivered(ctx, threadID, messageID)
+}
+
+// MarkAsSeen marks all messages as seen up to a given timestamp (Facebook only).
+func (c *Client) MarkAsSeen(ctx context.Context, timestampMs int64) error {
+	if c.client.Facebook == nil {
+		return fmt.Errorf("MarkAsSeen: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.MarkAsSeen(ctx, timestampMs)
+}
+
+// SearchForThread searches for threads by name (Facebook only).
+func (c *Client) SearchForThread(ctx context.Context, queryStr string) ([]byte, error) {
+	if c.client.Facebook == nil {
+		return nil, fmt.Errorf("SearchForThread: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.SearchForThread(ctx, queryStr)
+}
+
+// GetThreadPictures fetches shared photos from a thread (Facebook only).
+func (c *Client) GetThreadPictures(ctx context.Context, threadID int64, offset, limit int) ([]byte, error) {
+	if c.client.Facebook == nil {
+		return nil, fmt.Errorf("GetThreadPictures: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.GetThreadPictures(ctx, threadID, offset, limit)
+}
+
+// GetUserInfo fetches detailed user info via GraphQL (Facebook only).
+func (c *Client) GetUserInfo(ctx context.Context, userIDs []int64) ([]byte, error) {
+	if c.client.Facebook == nil {
+		return nil, fmt.Errorf("GetUserInfo: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.GetUserInfo(ctx, userIDs)
+}
+
+// GetUserInfoV2 fetches user info via CometHovercard GraphQL (Facebook only).
+func (c *Client) GetUserInfoV2(ctx context.Context, userID int64) ([]byte, error) {
+	if c.client.Facebook == nil {
+		return nil, fmt.Errorf("GetUserInfoV2: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.GetUserInfoV2(ctx, userID)
+}
+
+// CreateThemeAI generates an AI-designed chat theme from a prompt (Facebook only).
+func (c *Client) CreateThemeAI(ctx context.Context, prompt string) ([]byte, error) {
+	if c.client.Facebook == nil {
+		return nil, fmt.Errorf("CreateThemeAI: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.CreateThemeAI(ctx, prompt, c.selfID)
+}
+
+// GetThemePictures fetches theme assets by theme ID (Facebook only).
+func (c *Client) GetThemePictures(ctx context.Context, themeID string) ([]byte, error) {
+	if c.client.Facebook == nil {
+		return nil, fmt.Errorf("GetThemePictures: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.GetThemePictures(ctx, themeID)
+}
+
+// SetPostReaction sets a reaction on a Facebook post (Facebook only).
+// Reaction types: 0=unlike, 1=like, 2=heart, 16=love, 4=haha, 3=wow, 7=sad, 8=angry
+func (c *Client) SetPostReaction(ctx context.Context, postID string, reactionType int) ([]byte, error) {
+	if c.client.Facebook == nil {
+		return nil, fmt.Errorf("SetPostReaction: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.SetPostReaction(ctx, postID, reactionType, c.selfID)
+}
+
+// HandleFriendRequest accepts or rejects a friend request (Facebook only).
+func (c *Client) HandleFriendRequest(ctx context.Context, userID int64, accept bool) error {
+	if c.client.Facebook == nil {
+		return fmt.Errorf("HandleFriendRequest: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.HandleFriendRequest(ctx, userID, accept)
+}
+
+// Unfriend removes a user from the friends list (Facebook only).
+func (c *Client) Unfriend(ctx context.Context, userID int64) error {
+	if c.client.Facebook == nil {
+		return fmt.Errorf("Unfriend: only supported on Facebook/Messenger")
+	}
+	return c.client.Facebook.Unfriend(ctx, userID)
 }

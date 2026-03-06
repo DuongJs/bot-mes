@@ -7,6 +7,12 @@
     "fr": "",
     "datr": ""
   },
+  "auto_login": {
+    "enabled": false,
+    "uid": "",
+    "password": "",
+    "two_fa_secret": ""
+  },
   "storage": {
     "message_db_path": "data/messages.sqlite"
   },

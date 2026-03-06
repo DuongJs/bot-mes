@@ -36,15 +36,27 @@ type WaveformData struct {
 	SamplingFrequency int       `json:"sampling_frequency"`
 }
 
+// uploadTimeout is the per-upload context deadline.  Videos and large files
+// frequently need more than the default 60 s global HTTP timeout.
+const uploadTimeout = 120 * time.Second
+
 func (c *Client) SendMercuryUploadRequest(ctx context.Context, threadID int64, media *MercuryUploadMedia) (*types.MercuryUploadResponse, error) {
 	if c == nil {
 		return nil, ErrClientIsNil
 	}
+
+	// Extend the context deadline for uploads (videos can be large).
+	uploadCtx, cancel := context.WithTimeout(ctx, uploadTimeout)
+	defer cancel()
+
 	urlQueries := c.newHTTPQuery()
 	queryValues, err := query.Values(urlQueries)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert HttpQuery into query.Values for mercury upload: %w", err)
 	}
+
+	// Ensure __ccg=EXCELLENT is present (JS FCA always sends this).
+	queryValues.Set("__ccg", "EXCELLENT")
 
 	payloadQuery := queryValues.Encode()
 	url := c.GetEndpoint("media_upload") + payloadQuery
@@ -62,15 +74,23 @@ func (c *Client) SendMercuryUploadRequest(ctx context.Context, threadID int64, m
 	h.Set("sec-fetch-mode", "cors")
 	h.Set("sec-fetch-site", "same-origin") // header is required
 
+	// --- Headers learned from JS FCA (fca-unofficial) that improve success rate ---
+	if c.configs != nil && c.configs.LSDToken != "" {
+		h.Set("x-fb-lsd", c.configs.LSDToken)
+	}
+	h.Set("x-fb-friendly-name", "MercuryUpload")
+	h.Set("x-asbd-id", "359341")
+	h.Set("x-fb-request-analytics-tags", `{"network_tags":{"product":"256002347743983","purpose":"none","request_category":"graphql","retry_attempt":"0"},"application_tags":"graphservice"}`)
+
 	var attempts int
 	for {
 		attempts += 1
-		_, respBody, err := c.MakeRequest(ctx, url, "POST", h, payload, types.NONE)
+		_, respBody, err := c.MakeRequest(uploadCtx, url, "POST", h, payload, types.NONE)
 		if err != nil {
 			// MakeRequest retries itself, so bail immediately if that fails
 			return nil, fmt.Errorf("failed to send MercuryUploadRequest: %w", err)
 		}
-		resp, err := c.parseMercuryResponse(ctx, respBody)
+		resp, err := c.parseMercuryResponse(uploadCtx, respBody)
 		if err == nil {
 			return resp, nil
 		} else if attempts > MaxHTTPRetries {

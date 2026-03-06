@@ -27,3 +27,10 @@ mybot/release/
 # OS
 .DS_Store
 Thumbs.db
+
+# Database
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db

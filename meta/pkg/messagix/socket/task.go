@@ -38,6 +38,11 @@ var TaskLabels = map[string]string{
 	"CreateCommunitySubThread":     "665",
 	"FetchAdditionalThreadData":    "733",
 	"EditMessageTask":              "742",
+	"ShareContactTask":             "359",
+	"ChangeNicknameTask":           "44",
+	"ChangeThreadColorTask":        "43",
+	"ChangeThreadEmojiTask":        "100003",
+	"TypingIndicatorTask":          "3",
 }
 
 type Task interface {

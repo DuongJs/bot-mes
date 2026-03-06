@@ -69,6 +69,15 @@ func DefaultPerformanceConfig() PerformanceConfig {
 	}
 }
 
+// AutoLoginConfig holds credentials for automatic Facebook login
+// when cookies are expired or missing.
+type AutoLoginConfig struct {
+	Enabled     bool   `json:"enabled"`
+	UID         string `json:"uid"`
+	Password    string `json:"password"`
+	TwoFASecret string `json:"two_fa_secret"`
+}
+
 type Config struct {
 	mu sync.RWMutex
 
@@ -91,6 +100,9 @@ type Config struct {
 	// ForceRefreshIntervalSeconds is the interval in seconds between periodic
 	// full reconnects. Set to 0 to disable. Default: 3600 (1 hour).
 	ForceRefreshIntervalSeconds int `json:"force_refresh_interval_seconds"`
+
+	// AutoLogin holds credentials for automatic login when cookies expire.
+	AutoLogin AutoLoginConfig `json:"auto_login"`
 }
 
 const DefaultForceRefreshInterval = 3600 // 1 hour
@@ -217,8 +229,20 @@ func (c *Config) Update(newCfg *Config) {
 	c.Modules = newCfg.Modules
 	c.Storage = newCfg.Storage
 	c.Performance = newCfg.Performance
+	c.AutoLogin = newCfg.AutoLogin
 	c.applyPerformanceDefaults()
 	c.mergeCookieString()
+}
+
+// UpdateCookies updates the cookie string and map, then saves to disk.
+func (c *Config) UpdateCookies(cookieString string, cookies map[string]string, configPath string) error {
+	c.mu.Lock()
+	c.CookieString = cookieString
+	for k, v := range cookies {
+		c.Cookies[k] = v
+	}
+	c.mu.Unlock()
+	return c.Save(configPath)
 }
 
 // applyPerformanceDefaults fills zero-valued performance fields with defaults.

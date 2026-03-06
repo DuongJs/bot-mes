@@ -93,3 +93,94 @@ func (t *SendReactionV2Task) GetLabel() string {
 func (t *SendReactionV2Task) Create() (any, any, bool) {
 	return t, []string{"reaction_v2", t.MessageID}, true
 }
+
+// ShareContactTask shares a contact card in a Messenger thread (label 359).
+// Ported from JS FCA shareContact.js.
+type ShareContactTask struct {
+	ContactID int64  `json:"contact_id"`
+	SyncGroup int64  `json:"sync_group"`
+	Text      string `json:"text"`
+	ThreadID  int64  `json:"thread_id"`
+}
+
+func (t *ShareContactTask) GetLabel() string {
+	return TaskLabels["ShareContactTask"]
+}
+
+func (t *ShareContactTask) Create() (any, any, bool) {
+	return t, "messenger_contact_sharing", false
+}
+
+// ChangeNicknameTask changes a participant's nickname in a thread (label 44).
+// Ported from JS FCA changeNickname.js.
+type ChangeNicknameTask struct {
+	ThreadKey int64  `json:"thread_key"`
+	ContactID int64  `json:"contact_id"`
+	Nickname  string `json:"nickname"`
+	SyncGroup int64  `json:"sync_group"`
+}
+
+func (t *ChangeNicknameTask) GetLabel() string {
+	return TaskLabels["ChangeNicknameTask"]
+}
+
+func (t *ChangeNicknameTask) Create() (any, any, bool) {
+	return t, "thread_participant_nickname", false
+}
+
+// ChangeThreadColorTask changes a thread's color/theme (label 43).
+// The ThemeFBID is the Facebook theme identifier (e.g. from threadColors map).
+// Ported from JS FCA changeThreadColor.js.
+type ChangeThreadColorTask struct {
+	ThreadKey int64       `json:"thread_key"`
+	ThemeFBID string      `json:"theme_fbid"`
+	Source    interface{} `json:"source"`
+	SyncGroup int64       `json:"sync_group"`
+	Payload   interface{} `json:"payload"`
+}
+
+func (t *ChangeThreadColorTask) GetLabel() string {
+	return TaskLabels["ChangeThreadColorTask"]
+}
+
+func (t *ChangeThreadColorTask) Create() (any, any, bool) {
+	return t, "thread_theme", false
+}
+
+// ChangeThreadEmojiTask changes the default quick-reaction emoji for a thread (label 100003).
+// Ported from JS FCA changeThreadEmoji.js.
+type ChangeThreadEmojiTask struct {
+	ThreadKey                        int64       `json:"thread_key"`
+	CustomEmoji                      string      `json:"custom_emoji"`
+	AvatarStickerInstructionKeyID    interface{} `json:"avatar_sticker_instruction_key_id"`
+	SyncGroup                        int64       `json:"sync_group"`
+}
+
+func (t *ChangeThreadEmojiTask) GetLabel() string {
+	return TaskLabels["ChangeThreadEmojiTask"]
+}
+
+func (t *ChangeThreadEmojiTask) Create() (any, any, bool) {
+	return t, "thread_quick_reaction", false
+}
+
+// TypingIndicatorTask sends a typing indicator to a thread (label 3).
+// This is a stateless task (type 4) — Create returns nil for queue_name.
+// Ported from JS FCA sendTypingIndicator.js.
+type TypingIndicatorTask struct {
+	ThreadKey     int64 `json:"thread_key"`
+	IsGroupThread int   `json:"is_group_thread"`
+	IsTyping      int   `json:"is_typing"`
+	Attribution   int   `json:"attribution"`
+	SyncGroup     int   `json:"sync_group"`
+	ThreadType    int   `json:"thread_type"`
+}
+
+func (t *TypingIndicatorTask) GetLabel() string {
+	return TaskLabels["TypingIndicatorTask"]
+}
+
+// Create returns nil queue_name, indicating this is a stateless task (type 4).
+func (t *TypingIndicatorTask) Create() (any, any, bool) {
+	return t, nil, false
+}

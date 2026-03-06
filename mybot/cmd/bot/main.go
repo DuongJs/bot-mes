@@ -19,6 +19,7 @@ import (
 
 	"mybot/internal/config"
 	"mybot/internal/core"
+	"mybot/internal/fblogin"
 	"mybot/internal/media"
 	"mybot/internal/messaging"
 	"mybot/internal/metrics"
@@ -75,8 +76,6 @@ type WrappedMessage struct {
 }
 
 func main() {
-	const configPath = "config.json"
-
 	startTime = time.Now()
 
 	// Purge leftover temp media files from previous runs.
@@ -246,6 +245,18 @@ func runBot(ctx context.Context) {
 }
 
 func runBotOnce(ctx context.Context) {
+	// Auto-login: if enabled and cookies look empty, login first
+	if cfg.AutoLogin.Enabled && cfg.AutoLogin.UID != "" && cfg.AutoLogin.Password != "" {
+		if !hasCookies(cfg.Cookies) {
+			logger.Info().Msg("No valid cookies found, attempting auto-login...")
+			if err := doAutoLogin(); err != nil {
+				logger.Error().Err(err).Msg("Auto-login failed")
+			} else {
+				logger.Info().Msg("Auto-login succeeded, cookies updated")
+			}
+		}
+	}
+
 	c := cookies.NewCookies()
 	c.Platform = types.Facebook
 	for k, v := range cfg.Cookies {
@@ -265,13 +276,41 @@ func runBotOnce(ctx context.Context) {
 
 	user, initialTable, err := newClient.LoadMessagesPage(ctx)
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to load messages page, retrying in 30s...")
-		select {
-		case <-time.After(30 * time.Second):
-		case <-ctx.Done():
+		// If auto-login is enabled, try to re-login and retry once
+		if cfg.AutoLogin.Enabled && cfg.AutoLogin.UID != "" && cfg.AutoLogin.Password != "" {
+			logger.Warn().Err(err).Msg("LoadMessagesPage failed, attempting auto-login...")
+			if loginErr := doAutoLogin(); loginErr != nil {
+				logger.Error().Err(loginErr).Msg("Auto-login failed")
+			} else {
+				logger.Info().Msg("Auto-login succeeded, retrying connection...")
+				// Rebuild cookies and client with fresh cookies
+				c2 := cookies.NewCookies()
+				c2.Platform = types.Facebook
+				for k, v := range cfg.Cookies {
+					if v != "" {
+						c2.Set(cookies.MetaCookieName(k), v)
+					}
+				}
+				newClient = messagix.NewClient(c2, logger, &messagix.Config{
+					MayConnectToDGW: true,
+				})
+				clientMu.Lock()
+				client = newClient
+				clientMu.Unlock()
+				newClient.SetEventHandler(handleEvent)
+
+				user, initialTable, err = newClient.LoadMessagesPage(ctx)
+			}
 		}
-		fullReconnect()
-		return
+		if err != nil {
+			logger.Error().Err(err).Msg("Failed to load messages page, retrying in 30s...")
+			select {
+			case <-time.After(30 * time.Second):
+			case <-ctx.Done():
+			}
+			fullReconnect()
+			return
+		}
 	}
 	selfID.Store(user.GetFBID())
 	logger.Info().Int64("id", selfID.Load()).Msg("Logged in")
@@ -536,4 +575,24 @@ func processMediaAuto(ctx context.Context, sender core.MessageSender, threadID i
 	if err := sender.SendMultiMedia(ctx, threadID, attachments); err != nil {
 		logger.Error().Err(err).Msg("Failed to send media")
 	}
+}
+
+// ── Auto-login helpers ─────────────────────────────────────────────────────────
+
+const configPath = "config.json"
+
+// hasCookies returns true if the cookies map has non-empty c_user and xs values.
+func hasCookies(cookies map[string]string) bool {
+	return cookies["c_user"] != "" && cookies["xs"] != ""
+}
+
+// doAutoLogin performs a Facebook login using credentials from config,
+// then updates the config with fresh cookies and saves to disk.
+func doAutoLogin() error {
+	result, err := fblogin.Login(cfg.AutoLogin.UID, cfg.AutoLogin.Password, cfg.AutoLogin.TwoFASecret)
+	if err != nil {
+		return err
+	}
+
+	return cfg.UpdateCookies(result.CookieString, result.Cookies, configPath)
 }
