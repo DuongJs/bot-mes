@@ -16,7 +16,7 @@ func NewService(pool *media.DownloadPool) *Service {
 	return &Service{Pool: pool}
 }
 
-func (s *Service) GetMediaItems(ctx context.Context, url string) ([]media.MediaItem, error) {
+func (s *Service) GetMediaItems(ctx context.Context, url string) (media.MediaResult, error) {
 	return media.GetMedia(ctx, url)
 }
 

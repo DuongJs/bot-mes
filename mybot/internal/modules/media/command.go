@@ -37,24 +37,19 @@ func (c *Command) Execute(ctx *core.CommandContext) error {
 		return fmt.Errorf("đường dẫn không hợp lệ")
 	}
 
-	// 1. Get media items
-	medias, err := c.Service.GetMediaItems(ctx.Ctx, url)
+	// 1. Get media result (items + optional post text)
+	result, err := c.Service.GetMediaItems(ctx.Ctx, url)
 	if err != nil {
 		ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Lỗi: %v", err))
 		return err
 	}
-	if len(medias) == 0 {
+	if len(result.Items) == 0 {
 		ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, "Không tìm thấy media")
 		return nil
 	}
 
-	ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Tìm thấy %d media, đang xử lý...", len(medias)))
-
-	// 2. Download all to temp files via the global download pool.
-	//    The pool limits system-wide concurrency (default 8), so many users
-	//    can download simultaneously without OOM, while one user with 10
-	//    images gets all available slots for maximum speed.
-	results := c.Service.DownloadBatch(ctx.Ctx, medias)
+	// 1b. Download all media to temp files via the global download pool.
+	results := c.Service.DownloadBatch(ctx.Ctx, result.Items)
 
 	// Ensure all temp files are cleaned up when we're done.
 	defer func() {
@@ -66,7 +61,7 @@ func (c *Command) Execute(ctx *core.CommandContext) error {
 		debug.FreeOSMemory()
 	}()
 
-	// 3. Collect successful downloads.
+	// 2. Collect successful downloads.
 	var attachments []core.MediaAttachment
 	for _, r := range results {
 		if r.Err != nil {
@@ -81,14 +76,25 @@ func (c *Command) Execute(ctx *core.CommandContext) error {
 		})
 	}
 
+	if len(attachments) == 0 && result.Message != "" {
+		// Chỉ có nội dung, không có media
+		ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, result.Message)
+		return nil
+	}
 	if len(attachments) == 0 {
 		return fmt.Errorf("tất cả media đều thất bại")
 	}
 
-	// 4. Send — upload reads data one file at a time from disk, releases immediately.
-	if err := ctx.Sender.SendMultiMedia(ctx.Ctx, ctx.ThreadID, attachments); err != nil {
-		ctx.Sender.SendMessage(ctx.Ctx, ctx.ThreadID, fmt.Sprintf("Gửi media thất bại: %v", err))
-	}
-
-	return nil
+	       // 3. Gửi nội dung và media trong cùng 1 tin nhắn nếu có cả hai
+	       caption := ""
+	       if result.Message != "" {
+		       caption = result.Message
+	       }
+	       if len(attachments) == 1 {
+		       // Đọc data nếu cần
+		       data, _ := attachments[0].GetData()
+		       return ctx.Sender.SendMedia(ctx.Ctx, ctx.ThreadID, data, attachments[0].Filename, attachments[0].MimeType, caption)
+	       }
+	       // Nhiều media: gửi kèm caption
+	       return ctx.Sender.SendMultiMedia(ctx.Ctx, ctx.ThreadID, attachments, caption)
 }

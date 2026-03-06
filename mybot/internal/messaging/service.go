@@ -319,24 +319,34 @@ func (s *LegacySender) SendMessage(ctx context.Context, threadID int64, text str
 	return err
 }
 
-func (s *LegacySender) SendMedia(ctx context.Context, threadID int64, data []byte, filename, mimeType string) error {
-	_, err := s.service.SendMedia(ctx, core.SendMediaRequest{
-		ThreadID: threadID,
-		Items: []core.MediaAttachment{{
-			Data:     data,
-			Filename: filename,
-			MimeType: mimeType,
-		}},
-	})
-	return err
+func (s *LegacySender) SendMedia(ctx context.Context, threadID int64, data []byte, filename, mimeType string, caption ...string) error {
+       text := ""
+       if len(caption) > 0 {
+	       text = caption[0]
+       }
+       _, err := s.service.SendMedia(ctx, core.SendMediaRequest{
+	       ThreadID: threadID,
+	       Items: []core.MediaAttachment{{
+		       Data:     data,
+		       Filename: filename,
+		       MimeType: mimeType,
+	       }},
+	       Text: text,
+       })
+       return err
 }
 
-func (s *LegacySender) SendMultiMedia(ctx context.Context, threadID int64, items []core.MediaAttachment) error {
-	_, err := s.service.SendMedia(ctx, core.SendMediaRequest{
-		ThreadID: threadID,
-		Items:    items,
-	})
-	return err
+func (s *LegacySender) SendMultiMedia(ctx context.Context, threadID int64, items []core.MediaAttachment, caption ...string) error {
+       text := ""
+       if len(caption) > 0 {
+	       text = caption[0]
+       }
+       _, err := s.service.SendMedia(ctx, core.SendMediaRequest{
+	       ThreadID: threadID,
+	       Items:    items,
+	       Text:     text,
+       })
+       return err
 }
 
 func (s *LegacySender) GetSelfID() int64 {

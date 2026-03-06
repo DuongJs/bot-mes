@@ -31,7 +31,7 @@ var httpClient = &http.Client{
 type PlatformHandler struct {
 	Name    string
 	Hosts   []string
-	Handler func(ctx context.Context, url string) ([]MediaItem, error)
+	Handler func(ctx context.Context, url string) (MediaResult, error)
 }
 
 // platforms is the ordered registry of supported media platforms.
@@ -73,13 +73,13 @@ func MatchHost(rawURL string, hosts []string) bool {
 	return false
 }
 
-func GetMedia(ctx context.Context, rawURL string) ([]MediaItem, error) {
+func GetMedia(ctx context.Context, rawURL string) (MediaResult, error) {
 	for _, p := range platforms {
 		if MatchHost(rawURL, p.Hosts) {
 			return p.Handler(ctx, rawURL)
 		}
 	}
-	return nil, fmt.Errorf("unsupported platform")
+	return MediaResult{}, fmt.Errorf("unsupported platform")
 }
 
 // FilenameFromMIME returns a filename with a proper extension based on the MIME type.

@@ -260,7 +260,8 @@ func (c *Config) UpdateCookies(cookieString string, cookies map[string]string, l
 	return c.Save(configPath)
 }
 
-// applyPerformanceDefaults fills zero-valued performance fields with defaults.
+// applyPerformanceDefaults fills zero-valued performance fields with defaults
+// and clamps excessively large values to safe upper bounds.
 func (c *Config) applyPerformanceDefaults() {
 	def := DefaultPerformanceConfig()
 	p := &c.Performance
@@ -290,6 +291,23 @@ func (c *Config) applyPerformanceDefaults() {
 	}
 	if p.MaxConcurrentDownloads <= 0 {
 		p.MaxConcurrentDownloads = def.MaxConcurrentDownloads
+	}
+
+	// Clamp upper bounds to prevent unreasonable resource usage.
+	clamp := func(val *int, max int) {
+		if *val > max {
+			*val = max
+		}
+	}
+	clamp(&p.WorkerCount, 100)
+	clamp(&p.JobQueueSize, 10000)
+	clamp(&p.DBBatchSize, 1000)
+	clamp(&p.DBReadPoolSize, 32)
+	clamp(&p.MaxConcurrentDownloads, 64)
+
+	// Ensure DBBatchSize does not exceed JobQueueSize.
+	if p.DBBatchSize > p.JobQueueSize {
+		p.DBBatchSize = p.JobQueueSize
 	}
 }
 

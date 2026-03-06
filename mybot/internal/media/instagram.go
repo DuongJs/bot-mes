@@ -72,16 +72,16 @@ func isShareURL(rawURL string) bool {
 	return false
 }
 
-func GetInstagramMedia(ctx context.Context, inputURL string) ([]MediaItem, error) {
+func GetInstagramMedia(ctx context.Context, inputURL string) (MediaResult, error) {
 	// Resolve share/redirect links
 	if isShareURL(inputURL) {
 		req, err := http.NewRequestWithContext(ctx, "GET", inputURL, nil)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create redirect request: %w", err)
+			return MediaResult{}, fmt.Errorf("failed to create redirect request: %w", err)
 		}
 		resp, err := httpClient.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("failed to check redirect: %w", err)
+			return MediaResult{}, fmt.Errorf("failed to check redirect: %w", err)
 		}
 		// Drain and close body so the connection can be reused.
 		io.Copy(io.Discard, resp.Body)
@@ -91,18 +91,18 @@ func GetInstagramMedia(ctx context.Context, inputURL string) ([]MediaItem, error
 
 	shortcode := extractShortcode(inputURL)
 	if shortcode == "" {
-		return nil, fmt.Errorf("invalid instagram url")
+		return MediaResult{}, fmt.Errorf("invalid instagram url")
 	}
 
 	// Query GraphQL with retry
 	data, err := igGraphQLRequest(ctx, shortcode, igDefaultRetries)
 	if err != nil {
-		return nil, err
+		return MediaResult{}, err
 	}
 
 	media := data.Data.XDTShorcodeMedia
 	if media == nil {
-		return nil, fmt.Errorf("no media found")
+		return MediaResult{}, fmt.Errorf("no media found")
 	}
 
 	var items []MediaItem
@@ -127,7 +127,7 @@ func GetInstagramMedia(ctx context.Context, inputURL string) ([]MediaItem, error
 		items = append(items, MediaItem{Type: t, URL: u})
 	}
 
-	return items, nil
+	return MediaResult{Items: items}, nil
 }
 
 // igGraphQLRequest calls Instagram's public GraphQL API with hardcoded headers.

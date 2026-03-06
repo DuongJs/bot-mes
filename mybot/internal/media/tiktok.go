@@ -31,7 +31,7 @@ type tikwmData struct {
 	Images    []string     `json:"images"`     // slideshow image URLs
 }
 
-func GetTikTokMedia(ctx context.Context, rawURL string) ([]MediaItem, error) {
+func GetTikTokMedia(ctx context.Context, rawURL string) (MediaResult, error) {
 	var lastErr error
 	for i := 0; i < 3; i++ {
 		if i > 0 {
@@ -39,7 +39,7 @@ func GetTikTokMedia(ctx context.Context, rawURL string) ([]MediaItem, error) {
 			select {
 			case <-time.After(backoff):
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return MediaResult{}, ctx.Err()
 			}
 		}
 		items, err := doTikWMRequest(ctx, rawURL)
@@ -47,9 +47,9 @@ func GetTikTokMedia(ctx context.Context, rawURL string) ([]MediaItem, error) {
 			lastErr = err
 			continue
 		}
-		return items, nil
+		return MediaResult{Items: items}, nil
 	}
-	return nil, fmt.Errorf("tikwm api failed after 3 retries: %w", lastErr)
+	return MediaResult{}, fmt.Errorf("tikwm api failed after 3 retries: %w", lastErr)
 }
 
 func doTikWMRequest(ctx context.Context, tiktokURL string) ([]MediaItem, error) {

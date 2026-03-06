@@ -12,8 +12,8 @@ import (
 // MessageSender abstracts the underlying transport (e.g., Facebook/Messagix).
 type MessageSender interface {
 	SendMessage(ctx context.Context, threadID int64, text string) error
-	SendMedia(ctx context.Context, threadID int64, data []byte, filename, mimeType string) error
-	SendMultiMedia(ctx context.Context, threadID int64, items []MediaAttachment) error
+	SendMedia(ctx context.Context, threadID int64, data []byte, filename, mimeType string, caption ...string) error
+	SendMultiMedia(ctx context.Context, threadID int64, items []MediaAttachment, caption ...string) error
 	GetSelfID() int64
 }
 

@@ -18,10 +18,10 @@ func (m *mockSender) SendMessage(_ context.Context, _ int64, text string) error 
 	m.lastMessage = text
 	return nil
 }
-func (m *mockSender) SendMedia(_ context.Context, _ int64, _ []byte, _, _ string) error {
+func (m *mockSender) SendMedia(_ context.Context, _ int64, _ []byte, _, _ string, _ ...string) error {
 	return nil
 }
-func (m *mockSender) SendMultiMedia(_ context.Context, _ int64, _ []core.MediaAttachment) error {
+func (m *mockSender) SendMultiMedia(_ context.Context, _ int64, _ []core.MediaAttachment, _ ...string) error {
 	return nil
 }
 func (m *mockSender) GetSelfID() int64 { return 0 }

@@ -59,6 +59,7 @@ type SendMediaRequest struct {
 	ThreadID int64
 	Items    []MediaAttachment
 	ReplyTo  *ReplyTarget
+	Text     string // caption cho media (nếu có)
 }
 
 type MessageController interface {

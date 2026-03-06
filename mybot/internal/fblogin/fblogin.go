@@ -109,7 +109,10 @@ func fetchPwdKey() (*pwdKeyResp, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("pwd_key_fetch read body: %w", err)
+	}
 	var result pwdKeyResp
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("pwd_key_fetch parse error: %w", err)
@@ -251,7 +254,10 @@ func (a *api) postForm(form url.Values) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
 	return body, nil
 }
 
@@ -555,7 +561,10 @@ func getSessionForApp(accessToken string) (*sessionForAppResp, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read session response body: %w", err)
+	}
 
 	var result sessionForAppResp
 	if err := json.Unmarshal(body, &result); err != nil {

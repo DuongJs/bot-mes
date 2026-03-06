@@ -34,31 +34,6 @@ func TestFilenameFromMIME(t *testing.T) {
 	}
 }
 
-func TestExtractAwemeID(t *testing.T) {
-	tests := []struct {
-		name     string
-		url      string
-		expected string
-	}{
-		{"tiktok video", "https://www.tiktok.com/@user/video/7123456789012345678", "7123456789012345678"},
-		{"tiktok photo", "https://www.tiktok.com/@user/photo/7123456789012345678", "7123456789012345678"},
-		{"tiktok note", "https://www.tiktok.com/@user/note/7123456789012345678", "7123456789012345678"},
-		{"douyin video", "https://www.douyin.com/video/7123456789012345678", "7123456789012345678"},
-		{"douyin note", "https://www.douyin.com/note/7123456789012345678", "7123456789012345678"},
-		{"no match", "https://www.example.com/page/123", ""},
-		{"empty", "", ""},
-		{"with query params", "https://www.tiktok.com/@user/video/7123456789012345678?is_from_webapp=1", "7123456789012345678"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractAwemeID(tt.url)
-			if got != tt.expected {
-				t.Errorf("extractAwemeID(%q) = %q, want %q", tt.url, got, tt.expected)
-			}
-		})
-	}
-}
-
 func TestMatchHost(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -313,7 +288,7 @@ func TestFacebookMediaVideoExtraction(t *testing.T) {
 	defer server.Close()
 
 	ctx := context.Background()
-	items, err := doFacebookMediaRequest(ctx, server.URL)
+	items, err := doLegacyFBRequest(ctx, server.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -339,7 +314,7 @@ func TestFacebookMediaPostImageFallback(t *testing.T) {
 	defer server.Close()
 
 	ctx := context.Background()
-	items, err := doFacebookMediaRequest(ctx, server.URL)
+	items, err := doLegacyFBRequest(ctx, server.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -364,7 +339,7 @@ func TestFacebookMediaPostImageDedup(t *testing.T) {
 	defer server.Close()
 
 	ctx := context.Background()
-	items, err := doFacebookMediaRequest(ctx, server.URL)
+	items, err := doLegacyFBRequest(ctx, server.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -385,7 +360,7 @@ func TestFacebookMediaNoContent(t *testing.T) {
 	defer server.Close()
 
 	ctx := context.Background()
-	_, err := doFacebookMediaRequest(ctx, server.URL)
+	_, err := doLegacyFBRequest(ctx, server.URL)
 	if err == nil {
 		t.Fatal("expected error when no media found, got nil")
 	}
@@ -400,7 +375,7 @@ func TestFacebookMediaVideoPrefersHD(t *testing.T) {
 	defer server.Close()
 
 	ctx := context.Background()
-	items, err := doFacebookMediaRequest(ctx, server.URL)
+	items, err := doLegacyFBRequest(ctx, server.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -421,7 +396,7 @@ func TestFacebookMediaEscapedImageURIs(t *testing.T) {
 	defer server.Close()
 
 	ctx := context.Background()
-	items, err := doFacebookMediaRequest(ctx, server.URL)
+	items, err := doLegacyFBRequest(ctx, server.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

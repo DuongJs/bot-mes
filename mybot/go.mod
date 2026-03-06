@@ -8,6 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/pquerna/otp v1.5.0
 	github.com/rs/zerolog v1.34.0
+	github.com/tidwall/gjson v1.18.0
 	go.etcd.io/bbolt v1.4.0
 	go.mau.fi/mautrix-meta v0.0.0-00010101000000-000000000000
 	modernc.org/sqlite v1.46.1
@@ -30,7 +31,6 @@ require (
 	github.com/petermattis/goid v0.0.0-20260113132338-7c7de50cc741 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/xid v1.6.0 // indirect
-	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect

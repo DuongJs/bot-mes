@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"os"
 	"os/signal"
 	"regexp"
@@ -77,20 +78,51 @@ type WrappedMessage struct {
 
 func main() {
 	startTime = time.Now()
+	flag.StringVar(&configPath, "config", "config.json", "path to config file")
+	flag.Parse()
 
 	// Purge leftover temp media files from previous runs.
 	media.CleanupTempDir()
 
-	// Load config
+	initConfig()
+	store := initStorage()
+	initMessaging(store)
+	defer func() {
+		if err := messageAPI.Close(); err != nil {
+			logger.Error().Err(err).Msg("Failed to close message DB")
+		}
+	}()
+
+	initWorkerPool()
+	defer workerPool.Stop()
+
+	registerModules()
+	metricStop := startBackgroundTasks()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go runBot(ctx)
+
+	// Wait for termination signal
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
+
+	cancel()
+	close(metricStop)
+	logger.Info().Msg("Bot stopped")
+}
+
+func initConfig() {
 	cfgInit, err := config.Load(configPath)
 	if err != nil {
 		basic := zerolog.New(os.Stdout).With().Timestamp().Logger()
 		basic.Fatal().Err(err).Msg("Failed to load config")
 	}
 	cfg = cfgInit
-
 	logger = initLogger()
+}
 
+func initStorage() *messaging.BatchedStore {
 	dbPath, err := config.ResolveMessageDBPath(configPath, cfg)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to resolve message DB path")
@@ -99,12 +131,15 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Str("path", dbPath).Msg("Failed to open message DB")
 	}
-	batchedStore := messaging.NewBatchedStore(
+	return messaging.NewBatchedStore(
 		store, logger,
 		cfg.Performance.JobQueueSize,
 		cfg.Performance.DBBatchSize,
 		cfg.Performance.DBBatchFlushMs,
 	)
+}
+
+func initMessaging(batchedStore *messaging.BatchedStore) {
 	messageAPI = messaging.NewService(
 		logger,
 		batchedStore,
@@ -126,23 +161,19 @@ func main() {
 		messaging.WithRateLimit(cfg.Performance.SendRatePerSecond, cfg.Performance.SendBurst),
 	)
 	legacySender = messaging.NewLegacySender(messageAPI)
-	defer func() {
-		if err := messageAPI.Close(); err != nil {
-			logger.Error().Err(err).Msg("Failed to close message DB")
-		}
-	}()
+}
 
-	// Start worker pool
+func initWorkerPool() {
 	workerPool = messaging.NewWorkerPool(
 		logger,
 		cfg.Performance.WorkerCount,
 		cfg.Performance.JobQueueSize,
 	)
-	defer workerPool.Stop()
+}
 
+func registerModules() {
 	cmds = registry.New()
 
-	// Register Modules
 	if enabled(cfg.Modules, "ping") {
 		cmds.Register(&ping.Command{})
 	}
@@ -151,6 +182,10 @@ func main() {
 		downloadPool := media.NewDownloadPool(cfg.Performance.MaxConcurrentDownloads)
 		mediaService = mediaMod.NewService(downloadPool)
 		cmds.Register(mediaMod.NewCommand(mediaService))
+		if token := cfg.Tokens.AccessToken; token != "" {
+			media.SetFacebookToken(token)
+			logger.Info().Msg("Facebook GraphQL token set from config")
+		}
 		logger.Info().Int("max_concurrent", downloadPool.Capacity()).Msg("Media download pool initialized")
 	}
 
@@ -179,32 +214,23 @@ func main() {
 	if enabled(cfg.Modules, "roll") {
 		cmds.Register(&roll.Command{})
 	}
+}
 
-	// Periodically clean expired cooldowns and seen messages
+// startBackgroundTasks launches periodic cleanup and metrics goroutines.
+// Returns a stop channel — close it to signal shutdown.
+func startBackgroundTasks() chan struct{} {
 	metricStop := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
 			cmds.CleanCooldowns()
+			logger.Debug().Msg("Cleared seen messages cache")
 			seenMessages.Clear()
 		}
 	}()
-
-	// Start periodic metrics logging
 	go metrics.StartPeriodicLog(logger, 60*time.Second, metricStop)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go runBot(ctx)
-
-	// Wait for termination signal
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
-
-	cancel()
-	close(metricStop)
-	logger.Info().Msg("Bot stopped")
+	return metricStop
 }
 
 func enabled(modules map[string]bool, name string) bool {
@@ -529,19 +555,22 @@ func handleMessage(msg *WrappedMessage) {
 }
 
 func processMediaAuto(ctx context.Context, sender core.MessageSender, threadID int64, url string) {
-	medias, err := mediaService.GetMediaItems(ctx, url)
+	result, err := mediaService.GetMediaItems(ctx, url)
 	if err != nil {
 		logger.Warn().Err(err).Str("url", url).Msg("Auto-detect media failed")
 		return
 	}
-	if len(medias) == 0 {
+	if len(result.Items) == 0 {
 		return
 	}
 
-	logger.Info().Str("url", url).Int("count", len(medias)).Msg("Auto-detected media")
+	logger.Info().Str("url", url).Int("count", len(result.Items)).Msg("Auto-detected media")
+
+	// Caption sẽ được gửi kèm media trong cùng 1 tin nhắn
+	caption := result.Message
 
 	// Download via global pool — respects system-wide concurrency limit.
-	results := mediaService.DownloadBatch(ctx, medias)
+	results := mediaService.DownloadBatch(ctx, result.Items)
 
 	// Ensure all temp files are cleaned up when done.
 	defer func() {
@@ -568,18 +597,22 @@ func processMediaAuto(ctx context.Context, sender core.MessageSender, threadID i
 	}
 
 	if len(attachments) == 0 {
+		// Không có media tải được, gửi caption nếu có
+		if caption != "" {
+			sender.SendMessage(ctx, threadID, caption)
+		}
 		return
 	}
 
-	// Send — upload reads one file at a time from disk.
-	if err := sender.SendMultiMedia(ctx, threadID, attachments); err != nil {
+	// Send media kèm caption trong cùng 1 tin nhắn
+	if err := sender.SendMultiMedia(ctx, threadID, attachments, caption); err != nil {
 		logger.Error().Err(err).Msg("Failed to send media")
 	}
 }
 
 // ── Auto-login helpers ─────────────────────────────────────────────────────────
 
-const configPath = "config.json"
+var configPath = "config.json"
 
 // hasCookies returns true if the cookies map has non-empty c_user and xs values.
 func hasCookies(cookies map[string]string) bool {
@@ -598,6 +631,11 @@ func doAutoLogin() error {
 		Str("login_token", result.LoginToken[:20]+"...").
 		Str("access_token", result.AccessToken[:20]+"...").
 		Msg("Auto-login obtained tokens")
+
+	// Update Facebook GraphQL token for media fetching
+	if result.AccessToken != "" {
+		media.SetFacebookToken(result.AccessToken)
+	}
 
 	return cfg.UpdateCookies(result.CookieString, result.Cookies, result.LoginToken, result.AccessToken, configPath)
 }

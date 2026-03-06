@@ -52,24 +52,34 @@ func (c *Client) SendMessage(ctx context.Context, threadID int64, text string) e
 	return err
 }
 
-func (c *Client) SendMedia(ctx context.Context, threadID int64, data []byte, filename, mimeType string) error {
-	_, err := c.SendMediaRich(ctx, core.SendMediaRequest{
-		ThreadID: threadID,
-		Items: []core.MediaAttachment{{
-			Data:     data,
-			Filename: filename,
-			MimeType: mimeType,
-		}},
-	})
-	return err
+// firstCaption extracts the first non-empty caption from the variadic list.
+func firstCaption(caption []string) string {
+	if len(caption) > 0 {
+		return caption[0]
+	}
+	return ""
 }
 
-func (c *Client) SendMultiMedia(ctx context.Context, threadID int64, items []core.MediaAttachment) error {
-	_, err := c.SendMediaRich(ctx, core.SendMediaRequest{
-		ThreadID: threadID,
-		Items:    items,
-	})
-	return err
+func (c *Client) SendMedia(ctx context.Context, threadID int64, data []byte, filename, mimeType string, caption ...string) error {
+       _, err := c.SendMediaRich(ctx, core.SendMediaRequest{
+	       ThreadID: threadID,
+	       Items: []core.MediaAttachment{{
+		       Data:     data,
+		       Filename: filename,
+		       MimeType: mimeType,
+	       }},
+	       Text: firstCaption(caption),
+       })
+       return err
+}
+
+func (c *Client) SendMultiMedia(ctx context.Context, threadID int64, items []core.MediaAttachment, caption ...string) error {
+       _, err := c.SendMediaRich(ctx, core.SendMediaRequest{
+	       ThreadID: threadID,
+	       Items:    items,
+	       Text:     firstCaption(caption),
+       })
+       return err
 }
 
 func (c *Client) GetSelfID() int64 {
@@ -131,66 +141,67 @@ func (c *Client) SendText(ctx context.Context, req core.SendTextRequest) (*core.
 }
 
 func (c *Client) SendMediaRich(ctx context.Context, req core.SendMediaRequest) (*core.MessageRecord, error) {
-	if len(req.Items) == 0 {
-		return nil, nil
-	}
+       if len(req.Items) == 0 {
+	       return nil, nil
+       }
 
-	attachmentIDs, err := c.uploadAttachmentIDs(ctx, req.ThreadID, req.Items)
-	if err != nil {
-		return nil, err
-	}
+       attachmentIDs, err := c.uploadAttachmentIDs(ctx, req.ThreadID, req.Items)
+       if err != nil {
+	       return nil, err
+       }
 
-	// Generate OTID once so retries reuse the same ID (Facebook deduplicates by OTID).
-	otid := methods.GenerateEpochID()
+       // Generate OTID once so retries reuse the same ID (Facebook deduplicates by OTID).
+       otid := methods.GenerateEpochID()
 
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		if i > 0 {
-			select {
-			case <-time.After(time.Duration(i) * 500 * time.Millisecond):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
+       var lastErr error
+       for i := 0; i < maxRetries; i++ {
+	       if i > 0 {
+		       select {
+		       case <-time.After(time.Duration(i) * 500 * time.Millisecond):
+		       case <-ctx.Done():
+			       return nil, ctx.Err()
+		       }
+	       }
 
-		task := &socket.SendMessageTask{
-			ThreadId:        req.ThreadID,
-			AttachmentFBIds: attachmentIDs,
-			Source:          table.MESSENGER_INBOX_IN_THREAD,
-			SendType:        table.MEDIA,
-			SyncGroup:       1,
-			Otid:            otid,
-		}
-		if req.ReplyTo != nil && req.ReplyTo.MessageID != "" {
-			task.ReplyMetaData = &socket.ReplyMetaData{
-				ReplyMessageId:  req.ReplyTo.MessageID,
-				ReplySourceType: 1,
-				ReplyType:       0,
-			}
-		}
+	       task := &socket.SendMessageTask{
+		       ThreadId:        req.ThreadID,
+		       AttachmentFBIds: attachmentIDs,
+		       Source:          table.MESSENGER_INBOX_IN_THREAD,
+		       SendType:        table.MEDIA,
+		       SyncGroup:       1,
+		       Otid:            otid,
+		       Text:            req.Text,
+	       }
+	       if req.ReplyTo != nil && req.ReplyTo.MessageID != "" {
+		       task.ReplyMetaData = &socket.ReplyMetaData{
+			       ReplyMessageId:  req.ReplyTo.MessageID,
+			       ReplySourceType: 1,
+			       ReplyType:       0,
+		       }
+	       }
 
-		resp, err := c.client.ExecuteTask(ctx, task)
-		if err != nil {
-			lastErr = err
-			continue
-		}
+	       resp, err := c.client.ExecuteTask(ctx, task)
+	       if err != nil {
+		       lastErr = err
+		       continue
+	       }
 
-		// ExecuteTask succeeded → message was sent. Extract metadata if available.
-		rec := messageRecordFromSendResponse(resp, req.ThreadID, c.selfID)
-		if rec == nil {
-			rec = &core.MessageRecord{
-				ThreadID: req.ThreadID,
-				SenderID: c.selfID,
-			}
-		}
-		rec.HasMedia = true
-		rec.Attachments = attachmentMetaFromItems(req.Items, attachmentIDs)
-		if req.ReplyTo != nil {
-			rec.ReplyToMessageID = req.ReplyTo.MessageID
-		}
-		return rec, nil
-	}
-	return nil, lastErr
+	       // ExecuteTask succeeded → message was sent. Extract metadata if available.
+	       rec := messageRecordFromSendResponse(resp, req.ThreadID, c.selfID)
+	       if rec == nil {
+		       rec = &core.MessageRecord{
+			       ThreadID: req.ThreadID,
+			       SenderID: c.selfID,
+		       }
+	       }
+	       rec.HasMedia = true
+	       rec.Attachments = attachmentMetaFromItems(req.Items, attachmentIDs)
+	       if req.ReplyTo != nil {
+		       rec.ReplyToMessageID = req.ReplyTo.MessageID
+	       }
+	       return rec, nil
+       }
+       return nil, lastErr
 }
 
 func (c *Client) SendMediaMessage(ctx context.Context, req core.SendMediaRequest) (*core.MessageRecord, error) {

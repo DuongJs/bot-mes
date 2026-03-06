@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // MediaFile holds the path to a temporary file containing downloaded media data,
@@ -37,19 +38,23 @@ func (mf *MediaFile) ReadData() ([]byte, error) {
 	return os.ReadFile(mf.Path)
 }
 
-// tempDir caches the media temp directory path.
-var tempDir string
+// tempDir caches the media temp directory path (initialized once, thread-safe).
+var (
+	tempDirOnce sync.Once
+	tempDirPath string
+	tempDirErr  error
+)
 
 func getTempDir() (string, error) {
-	if tempDir != "" {
-		return tempDir, nil
-	}
-	dir := filepath.Join(os.TempDir(), "mybot-media")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	tempDir = dir
-	return dir, nil
+	tempDirOnce.Do(func() {
+		dir := filepath.Join(os.TempDir(), "mybot-media")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			tempDirErr = err
+			return
+		}
+		tempDirPath = dir
+	})
+	return tempDirPath, tempDirErr
 }
 
 // CleanupTempDir removes all leftover temp media files.
