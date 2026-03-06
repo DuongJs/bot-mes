@@ -34,3 +34,7 @@ Thumbs.db
 *.sqlite-wal
 *.sqlite-shm
 *.db
+
+# Config (contains credentials)
+mybot/config.json
+mybot/build_output/config.json
