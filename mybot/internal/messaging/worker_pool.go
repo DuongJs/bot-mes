@@ -18,11 +18,11 @@ type Job struct {
 // shared job queue.  This replaces the unbounded goroutine-per-message
 // semaphore pattern with predictable resource usage.
 type WorkerPool struct {
-	log      zerolog.Logger
-	queue    chan Job
-	wg       sync.WaitGroup
-	workers  int
-	stopped  atomic.Bool
+	log     zerolog.Logger
+	queue   chan Job
+	wg      sync.WaitGroup
+	workers int
+	stopped atomic.Bool
 }
 
 // NewWorkerPool creates a pool with the given number of workers and queue capacity.

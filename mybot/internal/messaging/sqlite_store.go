@@ -115,7 +115,7 @@ func OpenSQLiteStore(path string, readPoolSize ...int) (*SQLiteStore, error) {
 	// Optimize WAL settings on the write connection.
 	for _, pragma := range []string{
 		"PRAGMA wal_autocheckpoint=1000",
-		"PRAGMA cache_size=-8000", // 8 MB
+		"PRAGMA cache_size=-8000",    // 8 MB
 		"PRAGMA mmap_size=268435456", // 256 MB
 		"PRAGMA temp_store=MEMORY",
 	} {

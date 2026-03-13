@@ -25,7 +25,7 @@ type Store interface {
 // BatchedStore wraps a Store with a WriteBatcher that groups writes into
 // single transactions for higher throughput.
 type BatchedStore struct {
-	Store                       // embedded for read operations
+	Store   // embedded for read operations
 	batcher *WriteBatcher
 }
 

@@ -70,7 +70,9 @@ func (m *MediaAttachment) DataSize() int64 {
 func (m *MediaAttachment) Cleanup() {
 	m.Data = nil
 	if m.FilePath != "" {
-		os.Remove(m.FilePath)
+		if err := os.Remove(m.FilePath); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "warning: failed to remove temp file %s: %v\n", m.FilePath, err)
+		}
 		m.FilePath = ""
 	}
 }

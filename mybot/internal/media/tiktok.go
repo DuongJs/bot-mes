@@ -17,18 +17,18 @@ const (
 
 // tikwmResponse represents the tikwm.com API response.
 type tikwmResponse struct {
-	Code          int    `json:"code"`
-	Msg           string `json:"msg"`
-	ProcessedTime float64 `json:"processed_time"`
+	Code          int       `json:"code"`
+	Msg           string    `json:"msg"`
+	ProcessedTime float64   `json:"processed_time"`
 	Data          tikwmData `json:"data"`
 }
 
 type tikwmData struct {
-	ID        string       `json:"id"`
-	Title     string       `json:"title"`
-	Play      string       `json:"play"`       // video download URL (no watermark)
-	Hdplay    string       `json:"hdplay"`     // HD video URL
-	Images    []string     `json:"images"`     // slideshow image URLs
+	ID     string   `json:"id"`
+	Title  string   `json:"title"`
+	Play   string   `json:"play"`   // video download URL (no watermark)
+	Hdplay string   `json:"hdplay"` // HD video URL
+	Images []string `json:"images"` // slideshow image URLs
 }
 
 func GetTikTokMedia(ctx context.Context, rawURL string) (MediaResult, error) {

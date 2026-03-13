@@ -40,15 +40,15 @@ var (
 	}
 
 	// Legacy regex patterns for HTML scraping fallback
-	sdURLRegex       = regexp.MustCompile(`"browser_native_sd_url":"(.*?)"`)
-	playableURLRegex = regexp.MustCompile(`"playable_url":"(.*?)"`)
-	sdSrcRegex       = regexp.MustCompile(`sd_src\s*:\s*"([^"]*)"`)
-	srcRegex         = regexp.MustCompile(`"src":"[^"]*(https://[^"]*)`)
-	hdURLRegex       = regexp.MustCompile(`"browser_native_hd_url":"(.*?)"`)
+	sdURLRegex         = regexp.MustCompile(`"browser_native_sd_url":"(.*?)"`)
+	playableURLRegex   = regexp.MustCompile(`"playable_url":"(.*?)"`)
+	sdSrcRegex         = regexp.MustCompile(`sd_src\s*:\s*"([^"]*)"`)
+	srcRegex           = regexp.MustCompile(`"src":"[^"]*(https://[^"]*)`)
+	hdURLRegex         = regexp.MustCompile(`"browser_native_hd_url":"(.*?)"`)
 	playableHDURLRegex = regexp.MustCompile(`"playable_url_quality_hd":"(.*?)"`)
-	hdSrcRegex       = regexp.MustCompile(`hd_src\s*:\s*"([^"]*)"`)
-	ogImageRegex     = regexp.MustCompile(`<meta[^>]*property="og:image"[^>]*content="([^"]+)"`)
-	imageURIRegex    = regexp.MustCompile(`"image":\{"uri":"([^"]+)"`)
+	hdSrcRegex         = regexp.MustCompile(`hd_src\s*:\s*"([^"]*)"`)
+	ogImageRegex       = regexp.MustCompile(`<meta[^>]*property="og:image"[^>]*content="([^"]+)"`)
+	imageURIRegex      = regexp.MustCompile(`"image":\{"uri":"([^"]+)"`)
 )
 
 // SetFacebookToken sets the OAuth token used for Facebook GraphQL API calls.
@@ -178,10 +178,10 @@ func fbFetchStories(ctx context.Context, bucketID, storyID string) (MediaResult,
 	})
 
 	form := url.Values{
-		"fb_api_caller_class":        {"RelayModern"},
-		"fb_api_req_friendly_name":   {"StoriesSuspenseContentPaneRootWithEntryPointQuery"},
-		"doc_id":                     {"7114359461936746"},
-		"variables":                  {string(vars)},
+		"fb_api_caller_class":      {"RelayModern"},
+		"fb_api_req_friendly_name": {"StoriesSuspenseContentPaneRootWithEntryPointQuery"},
+		"doc_id":                   {"7114359461936746"},
+		"variables":                {string(vars)},
 	}
 
 	body, err := fbGraphqlPost(ctx, form)
@@ -305,47 +305,47 @@ func fbFetchPostMedia(ctx context.Context, rawURL string) (MediaResult, error) {
 
 	// 7. FetchGraphQLStoryAndMediaFromTokenQuery (mobile media)
 	mediaVars, _ := json.Marshal(map[string]interface{}{
-		"action_location":                     "feed",
-		"include_image_ranges":                true,
-		"image_medium_height":                 2048,
-		"query_media_type":                    "ALL",
-		"automatic_photo_captioning_enabled":  false,
-		"image_large_aspect_height":           565,
-		"angora_attachment_profile_image_size": 110,
-		"profile_pic_media_type":              "image/x-auto",
-		"scale":                               3,
-		"enable_cix_screen_rollout":           true,
-		"default_image_scale":                 3,
-		"angora_attachment_cover_image_size":   1320,
-		"image_low_height":                    2048,
-		"image_large_aspect_width":            1080,
-		"image_low_width":                     360,
-		"image_high_height":                   2048,
-		"node_id":                             nodeID,
-		"icon_scale":                          3,
-		"can_fetch_suggestion":                false,
-		"profile_image_size":                  110,
+		"action_location":                         "feed",
+		"include_image_ranges":                    true,
+		"image_medium_height":                     2048,
+		"query_media_type":                        "ALL",
+		"automatic_photo_captioning_enabled":      false,
+		"image_large_aspect_height":               565,
+		"angora_attachment_profile_image_size":    110,
+		"profile_pic_media_type":                  "image/x-auto",
+		"scale":                                   3,
+		"enable_cix_screen_rollout":               true,
+		"default_image_scale":                     3,
+		"angora_attachment_cover_image_size":      1320,
+		"image_low_height":                        2048,
+		"image_large_aspect_width":                1080,
+		"image_low_width":                         360,
+		"image_high_height":                       2048,
+		"node_id":                                 nodeID,
+		"icon_scale":                              3,
+		"can_fetch_suggestion":                    false,
+		"profile_image_size":                      110,
 		"reading_attachment_profile_image_height": 371,
 		"reading_attachment_profile_image_width":  248,
-		"fetch_fbc_header":  true,
-		"size_style":        "contain-fit",
-		"photos_feed_reduced_data_fetch": true,
-		"media_paginated_object_first":   200,
-		"in_channel_eligibility_experiment": false,
-		"fetch_cix_screen_nt_payload":   true,
-		"media_token":       "pcb." + postID,
-		"fetch_heisman_cta": true,
-		"fix_mediaset_cache_id": true,
-		"location_suggestion_profile_image_size": 110,
-		"image_high_width":  1080,
-		"media_type":        "image/jpeg",
-		"image_medium_width": 540,
+		"fetch_fbc_header":                        true,
+		"size_style":                              "contain-fit",
+		"photos_feed_reduced_data_fetch":          true,
+		"media_paginated_object_first":            200,
+		"in_channel_eligibility_experiment":       false,
+		"fetch_cix_screen_nt_payload":             true,
+		"media_token":                             "pcb." + postID,
+		"fetch_heisman_cta":                       true,
+		"fix_mediaset_cache_id":                   true,
+		"location_suggestion_profile_image_size":  110,
+		"image_high_width":                        1080,
+		"media_type":                              "image/jpeg",
+		"image_medium_width":                      540,
 		"nt_context": map[string]interface{}{
-			"styles_id":        "e6c6f61b7a86cdf3fa2eaaffa982fbd1",
+			"styles_id":          "e6c6f61b7a86cdf3fa2eaaffa982fbd1",
 			"using_white_navbar": true,
-			"pixel_ratio":      3,
-			"is_push_on":       true,
-			"bloks_version":    "c3cc18230235472b54176a5922f9b91d291342c3a276e2644dbdb9760b96deec",
+			"pixel_ratio":        3,
+			"is_push_on":         true,
+			"bloks_version":      "c3cc18230235472b54176a5922f9b91d291342c3a276e2644dbdb9760b96deec",
 		},
 	})
 	mediaForm := url.Values{
@@ -371,13 +371,13 @@ func fbFetchPostMedia(ctx context.Context, rawURL string) (MediaResult, error) {
 
 	// 8. Fallback: CometSinglePostContentQuery (web media)
 	webVars, _ := json.Marshal(map[string]interface{}{
-		"feedbackSource":              2,
-		"feedLocation":                "PERMALINK",
+		"feedbackSource":                2,
+		"feedLocation":                  "PERMALINK",
 		"privacySelectorRenderLocation": "COMET_STREAM",
-		"renderLocation":              "permalink",
-		"scale":                       1.5,
-		"storyID":                     nodeID,
-		"useDefaultActor":             false,
+		"renderLocation":                "permalink",
+		"scale":                         1.5,
+		"storyID":                       nodeID,
+		"useDefaultActor":               false,
 	})
 	webForm := url.Values{
 		"fb_api_req_friendly_name": {"CometSinglePostContentQuery"},

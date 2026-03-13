@@ -25,7 +25,9 @@ func (mf *MediaFile) Cleanup() {
 	if mf == nil || mf.Path == "" {
 		return
 	}
-	os.Remove(mf.Path)
+	if err := os.Remove(mf.Path); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "warning: failed to remove temp file %s: %v\n", mf.Path, err)
+	}
 	mf.Path = ""
 }
 

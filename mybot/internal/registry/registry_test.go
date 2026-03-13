@@ -9,8 +9,9 @@ import (
 )
 
 type MockCommand struct{}
-func (c *MockCommand) Name() string { return "ping" }
-func (c *MockCommand) Description() string { return "pong" }
+
+func (c *MockCommand) Name() string                           { return "ping" }
+func (c *MockCommand) Description() string                    { return "pong" }
 func (c *MockCommand) Execute(ctx *core.CommandContext) error { return nil }
 
 func TestRegistryExecuteUnknown(t *testing.T) {
