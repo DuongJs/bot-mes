@@ -64,8 +64,8 @@ var (
 
 	// fullReconnectCh signals the bot loop to perform a full reconnect
 	// (disconnect, reload messages page, reconnect).
-	fullReconnectCh     = make(chan struct{}, 1)
-	stopPeriodicReconn  atomic.Pointer[context.CancelFunc]
+	fullReconnectCh    = make(chan struct{}, 1)
+	stopPeriodicReconn atomic.Pointer[context.CancelFunc]
 )
 
 type WrappedMessage struct {
@@ -221,6 +221,11 @@ func registerModules() {
 func startBackgroundTasks() chan struct{} {
 	metricStop := make(chan struct{})
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error().Interface("panic", r).Msg("Background cleanup goroutine recovered from panic")
+			}
+		}()
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
@@ -628,8 +633,8 @@ func doAutoLogin() error {
 	}
 
 	logger.Info().
-		Str("login_token", result.LoginToken[:20]+"...").
-		Str("access_token", result.AccessToken[:20]+"...").
+		Int("login_token_len", len(result.LoginToken)).
+		Int("access_token_len", len(result.AccessToken)).
 		Msg("Auto-login obtained tokens")
 
 	// Update Facebook GraphQL token for media fetching

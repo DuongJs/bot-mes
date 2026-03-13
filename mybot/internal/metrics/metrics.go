@@ -16,8 +16,8 @@ type Perf struct {
 	CommandsExecuted  atomic.Int64
 	SendRateLimited   atomic.Int64
 
-	DBWriteOps       atomic.Int64
-	DBWriteBatches   atomic.Int64
+	DBWriteOps        atomic.Int64
+	DBWriteBatches    atomic.Int64
 	DBWriteDurationNs atomic.Int64 // total nanoseconds spent writing
 
 	WorkerQueueDepth atomic.Int64

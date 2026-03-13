@@ -42,8 +42,8 @@ var platforms = []PlatformHandler{
 		Handler: GetInstagramMedia,
 	},
 	{
-		Name:  "tiktok",
-		Hosts: []string{"tiktok.com"},
+		Name:    "tiktok",
+		Hosts:   []string{"tiktok.com"},
 		Handler: GetTikTokMedia,
 	},
 	{

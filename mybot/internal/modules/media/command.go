@@ -85,16 +85,19 @@ func (c *Command) Execute(ctx *core.CommandContext) error {
 		return fmt.Errorf("tất cả media đều thất bại")
 	}
 
-	       // 3. Gửi nội dung và media trong cùng 1 tin nhắn nếu có cả hai
-	       caption := ""
-	       if result.Message != "" {
-		       caption = result.Message
-	       }
-	       if len(attachments) == 1 {
-		       // Đọc data nếu cần
-		       data, _ := attachments[0].GetData()
-		       return ctx.Sender.SendMedia(ctx.Ctx, ctx.ThreadID, data, attachments[0].Filename, attachments[0].MimeType, caption)
-	       }
-	       // Nhiều media: gửi kèm caption
-	       return ctx.Sender.SendMultiMedia(ctx.Ctx, ctx.ThreadID, attachments, caption)
+	// 3. Gửi nội dung và media trong cùng 1 tin nhắn nếu có cả hai
+	caption := ""
+	if result.Message != "" {
+		caption = result.Message
+	}
+	if len(attachments) == 1 {
+		// Đọc data nếu cần
+		data, err := attachments[0].GetData()
+		if err != nil {
+			return fmt.Errorf("failed to read media data: %w", err)
+		}
+		return ctx.Sender.SendMedia(ctx.Ctx, ctx.ThreadID, data, attachments[0].Filename, attachments[0].MimeType, caption)
+	}
+	// Nhiều media: gửi kèm caption
+	return ctx.Sender.SendMultiMedia(ctx.Ctx, ctx.ThreadID, attachments, caption)
 }
