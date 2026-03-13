@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -107,7 +108,7 @@ func OpenSQLiteStore(path string, readPoolSize ...int) (*SQLiteStore, error) {
 	}
 
 	// ── Write connection ────────────────────────────────────────────────
-	writeDSN := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on&_synchronous=NORMAL", path)
+	writeDSN := fmt.Sprintf("file:%s?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=on&_synchronous=NORMAL", path)
 	writeDB, err := sql.Open("sqlite", writeDSN)
 	if err != nil {
 		return nil, fmt.Errorf("open write db: %w", err)
@@ -116,6 +117,25 @@ func OpenSQLiteStore(path string, readPoolSize ...int) (*SQLiteStore, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// Set critical PRAGMAs explicitly. journal_mode=WAL MUST be set before
+	// any schema operations to ensure the database uses WAL from the start.
+	// busy_timeout MUST be set to prevent immediate SQLITE_BUSY errors.
+	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA busy_timeout=5000",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA foreign_keys=ON",
+		"PRAGMA wal_autocheckpoint=1000",
+		"PRAGMA cache_size=-8000",       // 8 MB
+		"PRAGMA mmap_size=268435456",     // 256 MB
+		"PRAGMA temp_store=MEMORY",
+	} {
+		if _, err := writeDB.ExecContext(ctx, pragma); err != nil {
+			_ = writeDB.Close()
+			return nil, fmt.Errorf("pragma %q: %w", pragma, err)
+		}
+	}
 
 	if _, err := writeDB.ExecContext(ctx, sqliteSchema); err != nil {
 		_ = writeDB.Close()
@@ -126,22 +146,8 @@ func OpenSQLiteStore(path string, readPoolSize ...int) (*SQLiteStore, error) {
 		return nil, err
 	}
 
-	// Optimize WAL settings on the write connection.
-	for _, pragma := range []string{
-		"PRAGMA busy_timeout=5000",
-		"PRAGMA wal_autocheckpoint=1000",
-		"PRAGMA cache_size=-8000", // 8 MB
-		"PRAGMA mmap_size=268435456", // 256 MB
-		"PRAGMA temp_store=MEMORY",
-	} {
-		if _, err := writeDB.ExecContext(ctx, pragma); err != nil {
-			_ = writeDB.Close()
-			return nil, fmt.Errorf("pragma %q: %w", pragma, err)
-		}
-	}
-
 	// ── Read connection pool ────────────────────────────────────────────
-	readDSN := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on&mode=ro", path)
+	readDSN := fmt.Sprintf("file:%s?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=on&mode=ro", path)
 	readDB, err := sql.Open("sqlite", readDSN)
 	if err != nil {
 		_ = writeDB.Close()
@@ -150,11 +156,20 @@ func OpenSQLiteStore(path string, readPoolSize ...int) (*SQLiteStore, error) {
 	readDB.SetMaxOpenConns(poolSize)
 	readDB.SetMaxIdleConns(poolSize)
 
-	// Warm the read pool.
-	if err := readDB.PingContext(ctx); err != nil {
-		_ = writeDB.Close()
-		_ = readDB.Close()
-		return nil, fmt.Errorf("ping read db: %w", err)
+	// Warm ALL read pool connections and ensure busy_timeout is set on each.
+	// DSN parameters should handle this, but we set it explicitly as a
+	// safety net to cover every pooled connection.
+	readConns := make([]*sql.Conn, 0, poolSize)
+	for i := 0; i < poolSize; i++ {
+		conn, err := readDB.Conn(ctx)
+		if err != nil {
+			break
+		}
+		_, _ = conn.ExecContext(ctx, "PRAGMA busy_timeout=5000")
+		readConns = append(readConns, conn)
+	}
+	for _, conn := range readConns {
+		_ = conn.Close()
 	}
 
 	return &SQLiteStore{writeDB: writeDB, readDB: readDB}, nil
@@ -181,15 +196,39 @@ func (s *SQLiteStore) Close() error {
 // ExecBatch runs fn inside a single IMMEDIATE write transaction.
 // Using BEGIN IMMEDIATE acquires the write lock upfront, avoiding
 // SQLITE_BUSY from deferred lock escalation in WAL mode.
+// Retries up to 3 times on SQLITE_BUSY as a safety net.
 func (s *SQLiteStore) ExecBatch(fn func(tx txExecer) error) error {
-	// database/sql's Begin() issues a deferred BEGIN which can cause
-	// SQLITE_BUSY when escalating to a write lock.  We manage the
-	// transaction manually with BEGIN IMMEDIATE instead.
+	const maxBusyRetries = 3
+	var lastErr error
+
+	for attempt := 0; attempt <= maxBusyRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Millisecond)
+		}
+		err := s.execBatchOnce(fn, attempt > 0)
+		if err == nil {
+			return nil
+		}
+		if !isBusyError(err) {
+			return err
+		}
+		lastErr = err
+	}
+	return lastErr
+}
+
+func (s *SQLiteStore) execBatchOnce(fn func(tx txExecer) error, setBusyTimeout bool) error {
 	conn, err := s.writeDB.Conn(context.Background())
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
+
+	// On retry, explicitly re-set busy_timeout on this connection in case
+	// the DSN parameter was not applied when the connection was created.
+	if setBusyTimeout {
+		_, _ = conn.ExecContext(context.Background(), "PRAGMA busy_timeout=5000")
+	}
 
 	if _, err := conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
 		return err
@@ -210,6 +249,14 @@ func (s *SQLiteStore) ExecBatch(fn func(tx txExecer) error) error {
 		committed = true
 	}
 	return err
+}
+
+func isBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked")
 }
 
 // ── Threads ─────────────────────────────────────────────────────────────────

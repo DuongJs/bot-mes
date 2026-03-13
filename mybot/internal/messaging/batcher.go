@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"time"
 
@@ -110,9 +111,10 @@ func (b *WriteBatcher) loop() {
 			return
 		}
 
-		// Phase 2: Non-blocking drain of all immediately queued items.
-		// This eliminates the fixed timer delay while still batching
-		// concurrent writes that are already in the queue.
+		// Phase 2: Yield to let concurrent goroutines that were just
+		// unblocked (from previous Submit) enqueue their next item.
+		// Then non-blocking drain of all immediately queued items.
+		runtime.Gosched()
 		draining := true
 		for draining && len(batch) < b.maxBatch {
 			select {
