@@ -99,42 +99,32 @@ func (b *WriteBatcher) loop() {
 	defer b.wg.Done()
 
 	batch := make([]writeOp, 0, b.maxBatch)
-	timer := time.NewTimer(b.flushDur)
-	defer timer.Stop()
 
 	for {
-		// Wait for the first item or stop signal.
+		// Phase 1: Block until at least one item arrives.
 		select {
 		case op := <-b.queue:
 			batch = append(batch, op)
 		case <-b.stopCh:
-			// Drain remaining queue items.
 			b.drainAndFlush()
 			return
 		}
 
-		// Collect more items up to maxBatch or flushDur.
-		timer.Reset(b.flushDur)
-	collect:
-		for len(batch) < b.maxBatch {
+		// Phase 2: Non-blocking drain of all immediately queued items.
+		// This eliminates the fixed timer delay while still batching
+		// concurrent writes that are already in the queue.
+		draining := true
+		for draining && len(batch) < b.maxBatch {
 			select {
 			case op := <-b.queue:
 				batch = append(batch, op)
-			case <-timer.C:
-				break collect
 			case <-b.stopCh:
-				// Stop requested during collection; flush what we have then drain.
 				b.flush(batch)
 				batch = batch[:0]
 				b.drainAndFlush()
 				return
-			}
-		}
-
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
 			default:
+				draining = false
 			}
 		}
 

@@ -35,28 +35,47 @@ func NewRateLimiter(ratePerSecond, burst int) *RateLimiter {
 	}
 }
 
-// Wait blocks until a token is available or ctx is cancelled.
-// Returns nil when a token is acquired, or the context error.
+// Wait reserves a token and blocks until its time slot arrives or ctx is
+// cancelled. Uses a reservation-based O(1) algorithm: each call reserves one
+// token immediately (tokens may go negative) and sleeps for exactly the
+// deficit duration. Concurrent callers receive progressively longer waits,
+// automatically spacing messages at the configured rate with zero polling.
 func (r *RateLimiter) Wait(ctx context.Context) error {
-	if r.tryAcquire() {
+	r.mu.Lock()
+	now := time.Now()
+	elapsed := now.Sub(r.lastRefill).Seconds()
+	r.lastRefill = now
+
+	r.tokens += elapsed * r.globalRate
+	if r.tokens > float64(r.globalBurst) {
+		r.tokens = float64(r.globalBurst)
+	}
+
+	// Reserve one token upfront (allow negative to schedule future callers).
+	r.tokens -= 1.0
+	if r.tokens >= 0 {
+		r.mu.Unlock()
 		return nil
 	}
+
+	// Exact wait: time for the deficit to be replenished at globalRate.
+	waitDur := time.Duration(float64(time.Second) * (-r.tokens) / r.globalRate)
+	r.mu.Unlock()
+
 	metrics.Global.SendRateLimited.Add(1)
 
-	// Reuse a single timer to avoid heap allocation per poll iteration.
-	timer := time.NewTimer(25 * time.Millisecond)
+	timer := time.NewTimer(waitDur)
 	defer timer.Stop()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timer.C:
-			if r.tryAcquire() {
-				return nil
-			}
-			timer.Reset(25 * time.Millisecond)
-		}
+	select {
+	case <-ctx.Done():
+		// Return the reserved token on cancellation.
+		r.mu.Lock()
+		r.tokens += 1.0
+		r.mu.Unlock()
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
