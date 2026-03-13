@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/traefik/yaegi/interp"
@@ -59,19 +61,47 @@ func (s *ScriptCommand) Execute(ctx *core.CommandContext) error {
 	return nil
 }
 
+// pkgDeclRe matches "package main" at the start of a Go source file.
+var pkgDeclRe = regexp.MustCompile(`(?m)^package\s+main\b`)
+
+// rewritePackage replaces "package main" with a unique package name so
+// multiple scripts can coexist in a single Yaegi interpreter.
+func rewritePackage(src, pkgName string) string {
+	return pkgDeclRe.ReplaceAllString(src, "package "+pkgName)
+}
+
+// sanitizePkgName converts a directory name into a valid Go identifier
+// for use as a package name (e.g. "my-mod" → "mod_my_mod").
+func sanitizePkgName(dirName string) string {
+	s := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		return '_'
+	}, dirName)
+	return "mod_" + s
+}
+
 // LoadModules scans modulesDir for subdirectories containing a command.go file.
-// Each script module is loaded via Yaegi (Go interpreter) at runtime — no
-// recompilation required. Directories listed in skip are ignored (they are
-// compiled modules already registered by the binary).
+// All script modules share a SINGLE Yaegi interpreter to minimise memory usage
+// (stdlib.Symbols is loaded only once). Each script's "package main" is
+// rewritten to a unique package name to avoid symbol collisions.
+// Directories listed in skip are ignored (compiled modules).
 func LoadModules(modulesDir string, skip map[string]bool) ([]*ScriptCommand, []error) {
 	entries, err := os.ReadDir(modulesDir)
 	if err != nil {
 		return nil, nil
 	}
 
-	var cmds []*ScriptCommand
-	var errs []error
-
+	// Collect scripts to load.
+	type scriptEntry struct {
+		dirName string
+		path    string
+	}
+	var scripts []scriptEntry
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -80,15 +110,27 @@ func LoadModules(modulesDir string, skip map[string]bool) ([]*ScriptCommand, []e
 		if skip[name] {
 			continue
 		}
-
 		cmdFile := filepath.Join(modulesDir, name, "command.go")
 		if _, err := os.Stat(cmdFile); err != nil {
 			continue
 		}
+		scripts = append(scripts, scriptEntry{dirName: name, path: cmdFile})
+	}
+	if len(scripts) == 0 {
+		return nil, nil
+	}
 
-		cmd, err := loadScript(cmdFile, name)
+	// Create ONE shared interpreter for all script modules.
+	shared := interp.New(interp.Options{})
+	shared.Use(stdlib.Symbols)
+
+	var cmds []*ScriptCommand
+	var errs []error
+
+	for _, s := range scripts {
+		cmd, err := loadScriptInto(shared, s.path, s.dirName)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("script module %q: %w", name, err))
+			errs = append(errs, fmt.Errorf("script module %q: %w", s.dirName, err))
 			continue
 		}
 		cmds = append(cmds, cmd)
@@ -96,35 +138,36 @@ func LoadModules(modulesDir string, skip map[string]bool) ([]*ScriptCommand, []e
 	return cmds, errs
 }
 
-func loadScript(path, dirName string) (*ScriptCommand, error) {
-	src, err := os.ReadFile(path)
+// loadScriptInto loads a single script into the shared interpreter.
+// It rewrites "package main" to a unique package so symbols don't collide.
+func loadScriptInto(shared *interp.Interpreter, path, dirName string) (*ScriptCommand, error) {
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	i := interp.New(interp.Options{})
-	i.Use(stdlib.Symbols)
+	pkgName := sanitizePkgName(dirName)
+	src := rewritePackage(string(raw), pkgName)
 
-	_, err = i.Eval(string(src))
+	_, err = shared.Eval(src)
 	if err != nil {
 		return nil, fmt.Errorf("eval: %w", err)
 	}
 
 	// Extract Name() — call it once at load time.
-	name, err := evalStringCall(i, "main.Name()")
+	name, err := evalStringCall(shared, pkgName+".Name()")
 	if err != nil {
 		return nil, fmt.Errorf("Name(): %w", err)
 	}
 
 	// Extract Description() — call it once at load time.
-	desc, err := evalStringCall(i, "main.Description()")
+	desc, err := evalStringCall(shared, pkgName+".Description()")
 	if err != nil {
 		return nil, fmt.Errorf("Description(): %w", err)
 	}
 
 	// Extract Execute function value — keep for runtime calls.
-	// Signature: Execute(ctx map[string]interface{}) string
-	execVal, err := i.Eval("main.Execute")
+	execVal, err := shared.Eval(pkgName + ".Execute")
 	if err != nil {
 		return nil, fmt.Errorf("missing Execute(ctx map[string]interface{}) string: %w", err)
 	}

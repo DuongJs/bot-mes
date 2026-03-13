@@ -1,0 +1,16 @@
+# Build output
+build_output/
+*.exe
+mybot-linux
+mybot-windows
+
+# Config with secrets
+config.json
+
+# Database
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# Temp media
+data/tmp/
