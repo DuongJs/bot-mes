@@ -46,6 +46,13 @@ type PerformanceConfig struct {
 	// Default: 30.
 	MessageHandlerTimeoutSeconds int `json:"message_handler_timeout_seconds"`
 
+	// MediaCommandTimeoutSeconds is the context deadline for media-related
+	// commands (media, auto-detect URLs). This should be longer than
+	// MessageHandlerTimeoutSeconds because media operations involve
+	// downloading and uploading which can take minutes.
+	// Default: 180 (3 minutes).
+	MediaCommandTimeoutSeconds int `json:"media_command_timeout_seconds"`
+
 	// MaxConcurrentDownloads is the system-wide limit on parallel media
 	// downloads.  All users/groups share this pool.  Higher values give
 	// better throughput when many users request media simultaneously,
@@ -65,6 +72,7 @@ func DefaultPerformanceConfig() PerformanceConfig {
 		SendRatePerSecond:            30,
 		SendBurst:                    10,
 		MessageHandlerTimeoutSeconds: 30,
+		MediaCommandTimeoutSeconds:   180,
 		MaxConcurrentDownloads:       16,
 	}
 }
@@ -114,6 +122,7 @@ type Config struct {
 
 	// Tokens stores login tokens obtained from auto-login.
 	Tokens TokensConfig `json:"tokens"`
+
 }
 
 const DefaultForceRefreshInterval = 3600 // 1 hour
@@ -127,7 +136,7 @@ func New() *Config {
 		Storage: StorageConfig{
 			MessageDBPath: "data/messages.sqlite",
 		},
-		Performance: DefaultPerformanceConfig(),
+		Performance:   DefaultPerformanceConfig(),
 	}
 }
 
@@ -194,7 +203,7 @@ func Load(path string) (*Config, error) {
 		cfg.Storage.MessageDBPath = "data/messages.sqlite"
 	}
 
-	// Apply performance defaults for zero-valued fields
+	// Apply defaults for zero-valued fields
 	cfg.applyPerformanceDefaults()
 
 	// If cookie_string is provided, parse it and merge into cookies
@@ -288,6 +297,9 @@ func (c *Config) applyPerformanceDefaults() {
 	}
 	if p.MessageHandlerTimeoutSeconds <= 0 {
 		p.MessageHandlerTimeoutSeconds = def.MessageHandlerTimeoutSeconds
+	}
+	if p.MediaCommandTimeoutSeconds <= 0 {
+		p.MediaCommandTimeoutSeconds = def.MediaCommandTimeoutSeconds
 	}
 	if p.MaxConcurrentDownloads <= 0 {
 		p.MaxConcurrentDownloads = def.MaxConcurrentDownloads

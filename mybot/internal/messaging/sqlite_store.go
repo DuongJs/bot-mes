@@ -22,6 +22,20 @@ type txExecer interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
 
+// connExecer adapts *sql.Conn to the txExecer interface so that
+// ExecBatch can use BEGIN IMMEDIATE via a raw connection.
+type connExecer struct{ conn *sql.Conn }
+
+func (c connExecer) Exec(query string, args ...any) (sql.Result, error) {
+	return c.conn.ExecContext(context.Background(), query, args...)
+}
+func (c connExecer) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return c.conn.ExecContext(ctx, query, args...)
+}
+func (c connExecer) QueryRow(query string, args ...any) *sql.Row {
+	return c.conn.QueryRowContext(context.Background(), query, args...)
+}
+
 type SQLiteStore struct {
 	writeDB *sql.DB // single writer connection
 	readDB  *sql.DB // multiple reader connections (WAL)
@@ -114,6 +128,7 @@ func OpenSQLiteStore(path string, readPoolSize ...int) (*SQLiteStore, error) {
 
 	// Optimize WAL settings on the write connection.
 	for _, pragma := range []string{
+		"PRAGMA busy_timeout=5000",
 		"PRAGMA wal_autocheckpoint=1000",
 		"PRAGMA cache_size=-8000", // 8 MB
 		"PRAGMA mmap_size=268435456", // 256 MB
@@ -163,17 +178,38 @@ func (s *SQLiteStore) Close() error {
 	return firstErr
 }
 
-// ExecBatch runs fn inside a single write transaction.  Used by WriteBatcher.
+// ExecBatch runs fn inside a single IMMEDIATE write transaction.
+// Using BEGIN IMMEDIATE acquires the write lock upfront, avoiding
+// SQLITE_BUSY from deferred lock escalation in WAL mode.
 func (s *SQLiteStore) ExecBatch(fn func(tx txExecer) error) error {
-	tx, err := s.writeDB.Begin()
+	// database/sql's Begin() issues a deferred BEGIN which can cause
+	// SQLITE_BUSY when escalating to a write lock.  We manage the
+	// transaction manually with BEGIN IMMEDIATE instead.
+	conn, err := s.writeDB.Conn(context.Background())
 	if err != nil {
 		return err
 	}
-	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
 		return err
 	}
-	return tx.Commit()
+
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+
+	if err := fn(connExecer{conn}); err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(context.Background(), "COMMIT")
+	if err == nil {
+		committed = true
+	}
+	return err
 }
 
 // ── Threads ─────────────────────────────────────────────────────────────────

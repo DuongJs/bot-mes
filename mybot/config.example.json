@@ -16,15 +16,9 @@
   "storage": {
     "message_db_path": "data/messages.sqlite"
   },
-  "force_refresh_interval_seconds": 3600,
-  "modules": {
-    "ping": true,
-    "media": true,
-    "help": true,
-    "uptime": true,
-    "info": true,
-    "say": true,
-    "coinflip": true,
-    "roll": true
-  }
+  "performance": {
+    "message_handler_timeout_seconds": 30,
+    "media_command_timeout_seconds": 180
+  },
+  "force_refresh_interval_seconds": 3600
 }

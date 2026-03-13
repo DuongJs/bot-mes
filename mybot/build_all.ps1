@@ -37,6 +37,23 @@ if ($LASTEXITCODE -ne 0) { Write-Host "Linux build failed!" -ForegroundColor Red
 Write-Host "Copying config.example.json to config.json..." -ForegroundColor Cyan
 Copy-Item ".\config.example.json" -Destination "$Build_Dir\config.json"
 
+# Create modules directory and copy script modules.
+# Each subfolder with a command.go = an editable command (no recompilation needed).
+$ModulesDir = "$Build_Dir\modules"
+New-Item -ItemType Directory -Force -Path $ModulesDir | Out-Null
+
+# Copy script modules from source
+$ScriptSrc = ".\modules"
+if (Test-Path $ScriptSrc) {
+    Copy-Item -Path "$ScriptSrc\*" -Destination $ModulesDir -Recurse -Force
+    Write-Host "Copied script modules from modules/ into build output." -ForegroundColor Cyan
+}
+
+# Create data directory for runtime storage (SQLite DB, etc.)
+$DataDir = "$Build_Dir\data"
+New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+Write-Host "Created data/ directory." -ForegroundColor Cyan
+
 # If UPX is installed, compress the generated binaries to reduce size
 $upxCmd = Get-Command upx -ErrorAction SilentlyContinue
 if ($upxCmd) {

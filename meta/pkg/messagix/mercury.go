@@ -17,6 +17,21 @@ import (
 	"go.mau.fi/mautrix-meta/pkg/messagix/types"
 )
 
+// MercuryUploadAsbdID is the x-asbd-id header value sent with Mercury upload
+// requests. It differs from the default web value (129477) and identifies the
+// upload product surface on Facebook's infrastructure. Can be overridden at
+// runtime if Facebook changes it without a code deploy.
+var MercuryUploadAsbdID = "359341"
+
+// MercuryUploadProductID is the product identifier embedded in the
+// x-fb-request-analytics-tags header for Mercury uploads.
+var MercuryUploadProductID = "256002347743983"
+
+// DefaultUploadTimeout is the per-upload context deadline used when
+// MercuryUploadMedia.Timeout is zero. Videos and large files frequently need
+// more than the default 60 s global HTTP timeout.
+var DefaultUploadTimeout = 120 * time.Second
+
 type MercuryUploadMedia struct {
 	Filename  string
 	MimeType  string
@@ -29,6 +44,10 @@ type MercuryUploadMedia struct {
 
 	IsVoiceClip  bool
 	WaveformData *WaveformData
+
+	// Timeout overrides DefaultUploadTimeout for this specific upload.
+	// Leave zero to use DefaultUploadTimeout.
+	Timeout time.Duration
 }
 
 type WaveformData struct {
@@ -36,17 +55,18 @@ type WaveformData struct {
 	SamplingFrequency int       `json:"sampling_frequency"`
 }
 
-// uploadTimeout is the per-upload context deadline.  Videos and large files
-// frequently need more than the default 60 s global HTTP timeout.
-const uploadTimeout = 120 * time.Second
-
 func (c *Client) SendMercuryUploadRequest(ctx context.Context, threadID int64, media *MercuryUploadMedia) (*types.MercuryUploadResponse, error) {
 	if c == nil {
 		return nil, ErrClientIsNil
 	}
 
 	// Extend the context deadline for uploads (videos can be large).
-	uploadCtx, cancel := context.WithTimeout(ctx, uploadTimeout)
+	// Honour a per-upload override if provided, otherwise use the package default.
+	timeout := media.Timeout
+	if timeout <= 0 {
+		timeout = DefaultUploadTimeout
+	}
+	uploadCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	urlQueries := c.newHTTPQuery()
@@ -55,12 +75,16 @@ func (c *Client) SendMercuryUploadRequest(ctx context.Context, threadID int64, m
 		return nil, fmt.Errorf("failed to convert HttpQuery into query.Values for mercury upload: %w", err)
 	}
 
-	// Ensure __ccg=EXCELLENT is present (JS FCA always sends this).
-	queryValues.Set("__ccg", "EXCELLENT")
+	// __ccg comes from the session's WebConnectionClassServerGuess (set in
+	// newHTTPQuery via Ccg field).  Fall back to "EXCELLENT" only when the
+	// session hasn't populated the value yet.
+	if queryValues.Get("__ccg") == "" {
+		queryValues.Set("__ccg", "EXCELLENT")
+	}
 
 	payloadQuery := queryValues.Encode()
 	url := c.GetEndpoint("media_upload") + payloadQuery
-	payload, contentType, err := c.newMercuryMediaPayload(media)
+	payload, contentType, err := buildMercuryMediaPayload(media)
 	if err != nil {
 		return nil, err
 	}
@@ -74,13 +98,15 @@ func (c *Client) SendMercuryUploadRequest(ctx context.Context, threadID int64, m
 	h.Set("sec-fetch-mode", "cors")
 	h.Set("sec-fetch-site", "same-origin") // header is required
 
-	// --- Headers learned from JS FCA (fca-unofficial) that improve success rate ---
+	// Headers learned from JS FCA (fca-unofficial) that improve success rate.
+	// MercuryUploadAsbdID and MercuryUploadProductID are package-level vars
+	// so they can be patched without a code deploy if Facebook changes them.
 	if c.configs != nil && c.configs.LSDToken != "" {
 		h.Set("x-fb-lsd", c.configs.LSDToken)
 	}
 	h.Set("x-fb-friendly-name", "MercuryUpload")
-	h.Set("x-asbd-id", "359341")
-	h.Set("x-fb-request-analytics-tags", `{"network_tags":{"product":"256002347743983","purpose":"none","request_category":"graphql","retry_attempt":"0"},"application_tags":"graphservice"}`)
+	h.Set("x-asbd-id", MercuryUploadAsbdID)
+	h.Set("x-fb-request-analytics-tags", buildMercuryAnalyticsTags(MercuryUploadProductID))
 
 	var attempts int
 	for {
@@ -159,8 +185,31 @@ func (c *Client) parseMetadata(response *types.MercuryUploadResponse) error {
 	return nil
 }
 
+// buildMercuryAnalyticsTags constructs the x-fb-request-analytics-tags header
+// value for a Mercury upload request. productID is MercuryUploadProductID by
+// default, but can be overridden by callers that supply a different product surface.
+func buildMercuryAnalyticsTags(productID string) string {
+	tags := RequestAnalytics{
+		NetworkTags: NetworkTags{
+			Product:         productID,
+			Purpose:         "none",
+			RequestCategory: "graphql",
+			RetryAttempt:    "0",
+		},
+	}
+	// application_tags cannot be expressed through the struct above; marshal
+	// the struct and then inject the extra field manually to avoid a wrapper type.
+	inner, _ := json.Marshal(tags)
+	// Trim trailing } and append the application_tags field.
+	return string(inner[:len(inner)-1]) + `,"application_tags":"graphservice"}`
+}
+
+// buildMercuryMediaPayload constructs the multipart/form-data body for a
+// Mercury upload. It is a standalone function (no Client receiver) so it can
+// be unit-tested without a live session.
+//
 // returns payloadBytes, multipart content-type header
-func (c *Client) newMercuryMediaPayload(media *MercuryUploadMedia) ([]byte, string, error) {
+func buildMercuryMediaPayload(media *MercuryUploadMedia) ([]byte, string, error) {
 	var mercuryPayload bytes.Buffer
 	writer := multipart.NewWriter(&mercuryPayload)
 
