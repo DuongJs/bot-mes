@@ -38,17 +38,24 @@ func NewRateLimiter(ratePerSecond, burst int) *RateLimiter {
 // Wait blocks until a token is available or ctx is cancelled.
 // Returns nil when a token is acquired, or the context error.
 func (r *RateLimiter) Wait(ctx context.Context) error {
-	for {
-		if r.tryAcquire() {
-			return nil
-		}
-		metrics.Global.SendRateLimited.Add(1)
+	if r.tryAcquire() {
+		return nil
+	}
+	metrics.Global.SendRateLimited.Add(1)
 
-		// Wait a short interval before retrying.
+	// Reuse a single timer to avoid heap allocation per poll iteration.
+	timer := time.NewTimer(25 * time.Millisecond)
+	defer timer.Stop()
+
+	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(25 * time.Millisecond):
+		case <-timer.C:
+			if r.tryAcquire() {
+				return nil
+			}
+			timer.Reset(25 * time.Millisecond)
 		}
 	}
 }

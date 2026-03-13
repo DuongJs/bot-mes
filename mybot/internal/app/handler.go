@@ -59,7 +59,7 @@ func (b *Bot) handleMessage(msg *WrappedMessage) {
 	}
 
 	// Deduplicate.
-	if _, loaded := b.seenMessages.LoadOrStore(msg.MessageId, struct{}{}); loaded {
+	if b.seenMessages.LoadOrStore(msg.MessageId) {
 		return
 	}
 

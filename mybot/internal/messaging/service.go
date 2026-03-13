@@ -361,9 +361,27 @@ func (s *Service) refreshMissingMetadata(result *ProjectionResult) {
 		return
 	}
 
-	for userID := range result.MissingUserIDs {
-		go s.fetchUserMetadata(userID)
+	// Limit concurrent goroutines for user metadata fetches to avoid goroutine leak.
+	const maxConcurrentFetches = 5
+	userIDs := make([]int64, 0, len(result.MissingUserIDs))
+	for uid := range result.MissingUserIDs {
+		userIDs = append(userIDs, uid)
 	}
+	go func() {
+		sem := make(chan struct{}, maxConcurrentFetches)
+		var wg sync.WaitGroup
+		for _, uid := range userIDs {
+			sem <- struct{}{}
+			wg.Add(1)
+			go func(id int64) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				s.fetchUserMetadata(id)
+			}(uid)
+		}
+		wg.Wait()
+	}()
+
 	if len(result.MissingThreadIDs) > 0 {
 		go s.refreshMetadata()
 	}

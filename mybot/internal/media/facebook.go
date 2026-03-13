@@ -576,7 +576,7 @@ func legacyFBMedia(ctx context.Context, rawURL string) ([]MediaItem, error) {
 	}
 
 	var lastErr error
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 4; i++ {
 		if i > 0 {
 			backoff := time.Duration(i) * 200 * time.Millisecond
 			select {
@@ -592,7 +592,7 @@ func legacyFBMedia(ctx context.Context, rawURL string) ([]MediaItem, error) {
 		}
 		return items, nil
 	}
-	return nil, fmt.Errorf("facebook media failed after 10 retries: %w", lastErr)
+	return nil, fmt.Errorf("facebook media failed after 4 retries: %w", lastErr)
 }
 
 func doLegacyFBRequest(ctx context.Context, rawURL string) ([]MediaItem, error) {

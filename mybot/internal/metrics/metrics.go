@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -70,6 +71,12 @@ func StartPeriodicLog(log zerolog.Logger, interval time.Duration, stop <-chan st
 		select {
 		case <-ticker.C:
 			s := Global.Snap()
+
+			// Collect runtime memory and goroutine stats.
+			var memStats runtime.MemStats
+			runtime.ReadMemStats(&memStats)
+			numGoroutines := runtime.NumGoroutine()
+
 			log.Info().
 				Int64("msg_received", s.MessagesReceived).
 				Int64("msg_processed", s.MessagesProcessed).
@@ -80,6 +87,11 @@ func StartPeriodicLog(log zerolog.Logger, interval time.Duration, stop <-chan st
 				Int64("db_batches", s.DBWriteBatches).
 				Int64("db_write_ms_total", s.DBWriteDurationMs).
 				Int64("worker_queue_depth", s.WorkerQueueDepth).
+				Int("goroutines", numGoroutines).
+				Uint64("heap_alloc_mb", memStats.HeapAlloc/1024/1024).
+				Uint64("heap_inuse_mb", memStats.HeapInuse/1024/1024).
+				Uint64("sys_mb", memStats.Sys/1024/1024).
+				Uint32("gc_cycles", memStats.NumGC).
 				Msg("Performance metrics")
 		case <-stop:
 			return

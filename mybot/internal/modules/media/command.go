@@ -133,13 +133,9 @@ func (c *Command) Execute(ctx *core.CommandContext) error {
 		caption = result.Message
 	}
 
-	var sendErr error
-	if len(attachments) == 1 {
-		data, _ := attachments[0].GetData()
-		sendErr = ctx.Sender.SendMedia(ctx.Ctx, ctx.ThreadID, data, attachments[0].Filename, attachments[0].MimeType, caption)
-	} else {
-		sendErr = ctx.Sender.SendMultiMedia(ctx.Ctx, ctx.ThreadID, attachments, caption)
-	}
+	// Always use SendMultiMedia — it leverages file-backed streaming via
+	// OpenReader(), avoiding loading the entire file (up to 25 MB) into RAM.
+	sendErr := ctx.Sender.SendMultiMedia(ctx.Ctx, ctx.ThreadID, attachments, caption)
 
 	if sendErr != nil {
 		c.log.Error().

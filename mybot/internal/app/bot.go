@@ -21,6 +21,54 @@ import (
 	"mybot/internal/transport/facebook"
 )
 
+// seenCache is a bounded dedup cache that evicts oldest entries when full.
+// This prevents unbounded memory growth from the previous sync.Map approach.
+type seenCache struct {
+	mu      sync.Mutex
+	items   map[string]struct{}
+	order   []string
+	maxSize int
+}
+
+func newSeenCache(maxSize int) *seenCache {
+	if maxSize <= 0 {
+		maxSize = 50000
+	}
+	return &seenCache{
+		items:   make(map[string]struct{}, maxSize),
+		order:   make([]string, 0, maxSize),
+		maxSize: maxSize,
+	}
+}
+
+// LoadOrStore returns true if the key already exists (duplicate).
+// If the key is new, it is added and old entries are evicted if at capacity.
+func (c *seenCache) LoadOrStore(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.items[key]; ok {
+		return true
+	}
+	// Evict oldest entries if at capacity.
+	if len(c.order) >= c.maxSize {
+		evictCount := c.maxSize / 4 // evict 25% at a time to amortize cost
+		for i := 0; i < evictCount && i < len(c.order); i++ {
+			delete(c.items, c.order[i])
+		}
+		c.order = append(c.order[:0], c.order[evictCount:]...)
+	}
+	c.items[key] = struct{}{}
+	c.order = append(c.order, key)
+	return false
+}
+
+// Len returns the current number of entries.
+func (c *seenCache) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.items)
+}
+
 // Bot is the main application struct that encapsulates all state.
 // It replaces the previous global variables with a single composable unit.
 type Bot struct {
@@ -41,7 +89,7 @@ type Bot struct {
 	selfID       atomic.Int64
 	botReady     atomic.Bool
 	connectTime  atomic.Int64
-	seenMessages sync.Map
+	seenMessages *seenCache
 
 	fullReconnectCh    chan struct{}
 	stopPeriodicReconn atomic.Pointer[context.CancelFunc]
@@ -51,12 +99,17 @@ type Bot struct {
 // New creates a new Bot with the given config. It initializes storage,
 // messaging, worker pool, and modules but does NOT connect yet.
 func New(cfg *config.Config, configPath string, log zerolog.Logger) (*Bot, error) {
+	seenMaxSize := 50000
+	if cfg.Performance.SeenCacheMaxSize > 0 {
+		seenMaxSize = cfg.Performance.SeenCacheMaxSize
+	}
 	b := &Bot{
 		Log:             log,
 		Cfg:             cfg,
 		ConfigPath:      configPath,
 		startTime:       time.Now(),
 		fullReconnectCh: make(chan struct{}, 1),
+		seenMessages:    newSeenCache(seenMaxSize),
 	}
 
 	// Purge leftover temp media files from previous runs.
@@ -203,8 +256,7 @@ func (b *Bot) startBackgroundTasks() {
 			select {
 			case <-ticker.C:
 				b.cmds.CleanCooldowns()
-				b.seenMessages.Clear()
-				b.Log.Debug().Msg("Periodic cleanup: cooldowns + seen messages")
+				b.Log.Debug().Int("seen_cache_size", b.seenMessages.Len()).Msg("Periodic cleanup: cooldowns")
 			case <-b.metricStop:
 				return
 			}

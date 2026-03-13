@@ -86,8 +86,8 @@ func (b *Bot) connectOnce(ctx context.Context) {
 		return
 	}
 
-	// Periodic reconnect goroutine.
-	go b.periodicReconnect()
+	// Periodic reconnect goroutine (pass parent context for proper cancellation).
+	go b.periodicReconnect(ctx)
 
 	// Block until reconnect or shutdown.
 	select {
@@ -113,13 +113,13 @@ func (b *Bot) connectOnce(ctx context.Context) {
 }
 
 // periodicReconnect triggers a full reconnect on a timer.
-func (b *Bot) periodicReconnect() {
+func (b *Bot) periodicReconnect(parent context.Context) {
 	intervalSec := b.Cfg.ForceRefreshIntervalSeconds
 	if intervalSec <= 0 {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	if oldCancel := b.stopPeriodicReconn.Swap(&cancel); oldCancel != nil {
 		(*oldCancel)()

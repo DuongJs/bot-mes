@@ -59,6 +59,11 @@ type PerformanceConfig struct {
 	// but use more network bandwidth and temp disk space.
 	// Default: 8.
 	MaxConcurrentDownloads int `json:"max_concurrent_downloads"`
+
+	// SeenCacheMaxSize is the maximum number of message IDs kept in the
+	// deduplication cache.  When exceeded, the oldest 25% are evicted.
+	// Default: 50000.
+	SeenCacheMaxSize int `json:"seen_cache_max_size"`
 }
 
 // Defaults returns a PerformanceConfig with sensible defaults.
@@ -74,6 +79,7 @@ func DefaultPerformanceConfig() PerformanceConfig {
 		MessageHandlerTimeoutSeconds: 30,
 		MediaCommandTimeoutSeconds:   180,
 		MaxConcurrentDownloads:       16,
+		SeenCacheMaxSize:             50000,
 	}
 }
 

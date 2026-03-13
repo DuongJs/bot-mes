@@ -17,7 +17,7 @@ const (
 	igAppID      = "936619743392459"
 	igLSD        = "AdTG3HXj-AuAqL1v6Ppe6xBXk0s"
 
-	igDefaultRetries = 10
+	igDefaultRetries = 4
 )
 
 type InstagramResponse struct {
