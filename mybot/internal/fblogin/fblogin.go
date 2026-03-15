@@ -126,11 +126,17 @@ func encryptPassword(password string) (string, error) {
 		return "", fmt.Errorf("pwd_key_fetch failed: %w", err)
 	}
 
-	block, _ := pem.Decode([]byte(keyData.PublicKey))
-	if block == nil {
-		return "", fmt.Errorf("failed to decode PEM block")
+	var derBytes []byte
+	if block, _ := pem.Decode([]byte(keyData.PublicKey)); block != nil {
+		derBytes = block.Bytes
+	} else {
+		// The pwd_key_fetch API returns the key as a hex-encoded DER string.
+		derBytes, err = hex.DecodeString(keyData.PublicKey)
+		if err != nil {
+			return "", fmt.Errorf("failed to decode public key (not PEM or hex): %w", err)
+		}
 	}
-	pubKeyIface, err := x509.ParsePKIXPublicKey(block.Bytes)
+	pubKeyIface, err := x509.ParsePKIXPublicKey(derBytes)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse public key: %w", err)
 	}
