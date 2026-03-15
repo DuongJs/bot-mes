@@ -9,6 +9,7 @@ require (
 	github.com/pquerna/otp v1.5.0
 	github.com/rs/zerolog v1.34.0
 	github.com/tidwall/gjson v1.18.0
+	github.com/traefik/yaegi v0.16.1
 	go.etcd.io/bbolt v1.4.0
 	go.mau.fi/mautrix-meta v0.0.0-00010101000000-000000000000
 	modernc.org/sqlite v1.46.1
@@ -34,7 +35,6 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/traefik/yaegi v0.16.1 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.27 // indirect
 	github.com/yuin/goldmark v1.7.16 // indirect
 	go.mau.fi/libsignal v0.2.1 // indirect
