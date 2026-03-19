@@ -5,6 +5,8 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"runtime"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/rs/zerolog"
@@ -32,6 +34,18 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load config")
 	}
+
+	// Apply memory tuning from config.
+	gcPercent := cfg.Performance.GCPercent
+	if gcPercent > 0 && os.Getenv("GOGC") == "" {
+		debug.SetGCPercent(gcPercent)
+		log.Info().Int("gc_percent", gcPercent).Msg("GOGC overridden from config")
+	}
+	if memLimitMB := cfg.Performance.MemoryLimitMB; memLimitMB > 0 && os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(int64(memLimitMB) * 1024 * 1024)
+		log.Info().Int("memory_limit_mb", memLimitMB).Msg("GOMEMLIMIT overridden from config")
+	}
+	runtime.SetMutexProfileFraction(0)
 
 	bot, err := app.New(cfg, configPath, log)
 	if err != nil {

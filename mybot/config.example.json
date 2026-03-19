@@ -7,18 +7,34 @@
     "fr": "",
     "datr": ""
   },
+  "modules": {},
+  "storage": {
+    "message_db_path": "data/messages.sqlite"
+  },
+  "performance": {
+    "worker_count": 20,
+    "job_queue_size": 500,
+    "db_batch_size": 100,
+    "db_batch_flush_ms": 50,
+    "db_read_pool_size": 4,
+    "send_rate_per_second": 30,
+    "send_burst": 10,
+    "message_handler_timeout_seconds": 30,
+    "media_command_timeout_seconds": 180,
+    "max_concurrent_downloads": 16,
+    "seen_cache_max_size": 30000,
+    "memory_limit_mb": 0,
+    "gc_percent": 0
+  },
+  "force_refresh_interval_seconds": 3600,
   "auto_login": {
     "enabled": false,
     "uid": "",
     "password": "",
     "two_fa_secret": ""
   },
-  "storage": {
-    "message_db_path": "data/messages.sqlite"
-  },
-  "performance": {
-    "message_handler_timeout_seconds": 30,
-    "media_command_timeout_seconds": 180
-  },
-  "force_refresh_interval_seconds": 3600
+  "tokens": {
+    "login_token": "",
+    "access_token": ""
+  }
 }

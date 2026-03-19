@@ -100,6 +100,7 @@ func (b *WriteBatcher) loop() {
 	defer b.wg.Done()
 
 	batch := make([]writeOp, 0, b.maxBatch)
+	flushCount := 0
 
 	for {
 		// Phase 1: Block until at least one item arrives.
@@ -132,6 +133,14 @@ func (b *WriteBatcher) loop() {
 
 		b.flush(batch)
 		batch = batch[:0]
+
+		// Periodically reallocate the batch slice to release memory if it
+		// grew due to a burst. Without this, a one-time spike would keep
+		// the large backing array alive forever.
+		flushCount++
+		if flushCount%1000 == 0 {
+			batch = make([]writeOp, 0, b.maxBatch)
+		}
 	}
 }
 

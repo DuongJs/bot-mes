@@ -62,13 +62,21 @@ func (c *existenceCache) addThread(id int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.threads) >= c.maxItems {
-		// Cheap eviction: clear half.
+		// Rebuild the map to release memory from deleted entries.
+		// Go maps never shrink their backing array, so after many
+		// deletions the old map still holds pages. A fresh map with
+		// half capacity uses far less RAM.
+		keepCount := c.maxItems / 2
+		newMap := make(map[int64]struct{}, keepCount)
+		i := 0
 		for k := range c.threads {
-			delete(c.threads, k)
-			if len(c.threads) < c.maxItems/2 {
+			if i >= keepCount {
 				break
 			}
+			newMap[k] = struct{}{}
+			i++
 		}
+		c.threads = newMap
 	}
 	c.threads[id] = struct{}{}
 }
@@ -84,12 +92,17 @@ func (c *existenceCache) addUser(id int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.users) >= c.maxItems {
+		keepCount := c.maxItems / 2
+		newMap := make(map[int64]struct{}, keepCount)
+		i := 0
 		for k := range c.users {
-			delete(c.users, k)
-			if len(c.users) < c.maxItems/2 {
+			if i >= keepCount {
 				break
 			}
+			newMap[k] = struct{}{}
+			i++
 		}
+		c.users = newMap
 	}
 	c.users[id] = struct{}{}
 }

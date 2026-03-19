@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"math/rand/v2"
 	"time"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix"
@@ -89,6 +90,9 @@ func (b *Bot) connectOnce(ctx context.Context) {
 	// Periodic reconnect goroutine (pass parent context for proper cancellation).
 	go b.periodicReconnect(ctx)
 
+	// Lightweight token refresh (fb_dtsg / jazoest / LSD) without disconnecting.
+	go b.tokenRefreshLoop(ctx, newClient)
+
 	// Block until reconnect or shutdown.
 	select {
 	case <-b.fullReconnectCh:
@@ -112,10 +116,12 @@ func (b *Bot) connectOnce(ctx context.Context) {
 	}
 }
 
-// periodicReconnect triggers a full reconnect on a timer.
+// periodicReconnect triggers a full reconnect on a randomised timer.
+// The actual delay is between 1x and 2x the configured interval to
+// avoid predictable reconnect patterns.
 func (b *Bot) periodicReconnect(parent context.Context) {
 	intervalSec := b.Cfg.ForceRefreshIntervalSeconds
-	if intervalSec <= 0 {
+	if intervalSec < 0 {
 		return
 	}
 
@@ -125,7 +131,9 @@ func (b *Bot) periodicReconnect(parent context.Context) {
 		(*oldCancel)()
 	}
 
-	interval := time.Duration(intervalSec) * time.Second
+	base := time.Duration(intervalSec) * time.Second
+	jitter := time.Duration(rand.Int64N(int64(base)))
+	interval := base + jitter
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 
@@ -136,6 +144,31 @@ func (b *Bot) periodicReconnect(parent context.Context) {
 		b.Log.Info().Msg("Periodic reconnect timer fired")
 		b.triggerReconnect()
 	case <-ctx.Done():
+	}
+}
+
+// tokenRefreshLoop periodically refreshes fb_dtsg, jazoest and LSD tokens
+// without tearing down the socket connection.
+func (b *Bot) tokenRefreshLoop(ctx context.Context, client *messagix.Client) {
+	intervalSec := b.Cfg.TokenRefreshIntervalSeconds
+	if intervalSec < 0 {
+		return
+	}
+	interval := time.Duration(intervalSec) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	b.Log.Info().Stringer("interval", interval).Msg("Token refresh loop started")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := client.RefreshConfigs(ctx); err != nil {
+				b.Log.Warn().Err(err).Msg("Token refresh failed (will retry next tick)")
+			}
+		}
 	}
 }
 

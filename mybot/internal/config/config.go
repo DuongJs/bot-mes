@@ -61,9 +61,21 @@ type PerformanceConfig struct {
 	MaxConcurrentDownloads int `json:"max_concurrent_downloads"`
 
 	// SeenCacheMaxSize is the maximum number of message IDs kept in the
-	// deduplication cache.  When exceeded, the oldest 25% are evicted.
-	// Default: 50000.
+	// deduplication cache.  When exceeded, the oldest 50% are evicted.
+	// Default: 30000.
 	SeenCacheMaxSize int `json:"seen_cache_max_size"`
+
+	// MemoryLimitMB is the soft memory limit in megabytes passed to
+	// runtime/debug.SetMemoryLimit. The Go runtime will try to keep
+	// total RSS under this value and return pages to the OS aggressively.
+	// Default: 0 (disabled — use GOMEMLIMIT env var or Go defaults).
+	// Set to e.g. 512 only if you want to cap memory explicitly.
+	MemoryLimitMB int `json:"memory_limit_mb"`
+
+	// GCPercent controls GOGC (garbage collection target percentage).
+	// Lower values make GC run more frequently, reducing peak memory
+	// at the cost of more CPU. Default: 0 (disabled — uses Go default of 100).
+	GCPercent int `json:"gc_percent"`
 }
 
 // Defaults returns a PerformanceConfig with sensible defaults.
@@ -79,7 +91,9 @@ func DefaultPerformanceConfig() PerformanceConfig {
 		MessageHandlerTimeoutSeconds: 30,
 		MediaCommandTimeoutSeconds:   180,
 		MaxConcurrentDownloads:       16,
-		SeenCacheMaxSize:             50000,
+		SeenCacheMaxSize:             30000,
+		MemoryLimitMB:                0,
+		GCPercent:                    0,
 	}
 }
 
@@ -120,8 +134,14 @@ type Config struct {
 	Performance PerformanceConfig `json:"performance"`
 
 	// ForceRefreshIntervalSeconds is the interval in seconds between periodic
-	// full reconnects. Set to 0 to disable. Default: 3600 (1 hour).
+	// full reconnects (base value; actual delay is randomised between 1x–2x).
+	// Set to -1 to disable. 0 uses the default (10800 = 3 hours).
 	ForceRefreshIntervalSeconds int `json:"force_refresh_interval_seconds"`
+
+	// TokenRefreshIntervalSeconds is the interval between lightweight token
+	// refreshes (fb_dtsg, jazoest, LSD) without disconnecting socket.
+	// Set to -1 to disable. 0 uses the default (3600 = 1 hour).
+	TokenRefreshIntervalSeconds int `json:"token_refresh_interval_seconds"`
 
 	// AutoLogin holds credentials for automatic login when cookies expire.
 	AutoLogin AutoLoginConfig `json:"auto_login"`
@@ -131,7 +151,8 @@ type Config struct {
 
 }
 
-const DefaultForceRefreshInterval = 3600 // 1 hour
+const DefaultForceRefreshInterval = 10800 // 3 hours
+const DefaultTokenRefreshInterval = 3600  // 1 hour
 
 func New() *Config {
 	return &Config{
@@ -139,6 +160,7 @@ func New() *Config {
 		Cookies:                     make(map[string]string),
 		Modules:                     make(map[string]bool),
 		ForceRefreshIntervalSeconds: DefaultForceRefreshInterval,
+		TokenRefreshIntervalSeconds: DefaultTokenRefreshInterval,
 		Storage: StorageConfig{
 			MessageDBPath: "data/messages.sqlite",
 		},
@@ -209,11 +231,25 @@ func Load(path string) (*Config, error) {
 		cfg.Storage.MessageDBPath = "data/messages.sqlite"
 	}
 
-	// Apply defaults for zero-valued fields
+	// Apply defaults for zero-valued interval fields.
+	if cfg.ForceRefreshIntervalSeconds == 0 {
+		cfg.ForceRefreshIntervalSeconds = DefaultForceRefreshInterval
+	}
+	if cfg.TokenRefreshIntervalSeconds == 0 {
+		cfg.TokenRefreshIntervalSeconds = DefaultTokenRefreshInterval
+	}
+
+	// Apply defaults for zero-valued performance fields.
 	cfg.applyPerformanceDefaults()
 
 	// If cookie_string is provided, parse it and merge into cookies
 	cfg.mergeCookieString()
+
+	// Write back so that newly-added fields appear in the JSON file.
+	// This keeps the on-disk config in sync with code defaults even when
+	// the user's file was created before new fields were introduced.
+	// Non-fatal: bot still starts if write-back fails.
+	_ = cfg.Save(path)
 
 	return &cfg, nil
 }

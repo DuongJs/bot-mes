@@ -114,6 +114,7 @@ func OpenSQLiteStore(path string, readPoolSize ...int) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("open write db: %w", err)
 	}
 	writeDB.SetMaxOpenConns(1) // single writer
+	writeDB.SetConnMaxIdleTime(5 * time.Minute) // release idle connection to free memory
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -127,8 +128,8 @@ func OpenSQLiteStore(path string, readPoolSize ...int) (*SQLiteStore, error) {
 		"PRAGMA synchronous=NORMAL",
 		"PRAGMA foreign_keys=ON",
 		"PRAGMA wal_autocheckpoint=1000",
-		"PRAGMA cache_size=-8000",       // 8 MB
-		"PRAGMA mmap_size=268435456",     // 256 MB
+		"PRAGMA cache_size=-4000",       // 4 MB (reduced from 8 MB)
+		"PRAGMA mmap_size=67108864",     // 64 MB (reduced from 256 MB to lower RSS)
 		"PRAGMA temp_store=MEMORY",
 	} {
 		if _, err := writeDB.ExecContext(ctx, pragma); err != nil {
@@ -155,6 +156,7 @@ func OpenSQLiteStore(path string, readPoolSize ...int) (*SQLiteStore, error) {
 	}
 	readDB.SetMaxOpenConns(poolSize)
 	readDB.SetMaxIdleConns(poolSize)
+	readDB.SetConnMaxIdleTime(5 * time.Minute) // release idle reader connections
 
 	// Warm ALL read pool connections and ensure busy_timeout is set on each.
 	// DSN parameters should handle this, but we set it explicitly as a

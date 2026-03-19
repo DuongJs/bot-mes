@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,11 +53,16 @@ func (c *seenCache) LoadOrStore(key string) bool {
 	}
 	// Evict oldest entries if at capacity.
 	if len(c.order) >= c.maxSize {
-		evictCount := c.maxSize / 4 // evict 25% at a time to amortize cost
+		evictCount := c.maxSize / 2 // evict 50% to reduce allocation pressure
 		for i := 0; i < evictCount && i < len(c.order); i++ {
 			delete(c.items, c.order[i])
 		}
-		c.order = append(c.order[:0], c.order[evictCount:]...)
+		// Copy remaining entries to a new slice to release memory from the
+		// old backing array. The previous append(order[:0]...) kept the old
+		// large array alive, preventing GC from reclaiming it.
+		remaining := make([]string, len(c.order)-evictCount)
+		copy(remaining, c.order[evictCount:])
+		c.order = remaining
 	}
 	c.items[key] = struct{}{}
 	c.order = append(c.order, key)
@@ -257,6 +264,22 @@ func (b *Bot) startBackgroundTasks() {
 			case <-ticker.C:
 				b.cmds.CleanCooldowns()
 				b.Log.Debug().Int("seen_cache_size", b.seenMessages.Len()).Msg("Periodic cleanup: cooldowns")
+			case <-b.metricStop:
+				return
+			}
+		}
+	}()
+	// Periodically force the Go runtime to return unused memory to the OS.
+	// This is essential for long-running processes where spikes (e.g. media
+	// downloads) allocate large buffers that the default GC never releases.
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				runtime.GC()
+				debug.FreeOSMemory()
 			case <-b.metricStop:
 				return
 			}
